@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+import logging
 
 st.set_page_config(page_title="UI Prototype", layout="wide")
 
@@ -98,8 +99,10 @@ def load_dim_options(filename: str, default=None, col_index: int = 1) -> list[st
         Path("./data") / filename,      # ./data/
         Path("/mnt/data") / filename,   # uploaded files path
     ]
+    found_any = False
     for p in search_paths:
         if p.exists():
+            found_any = True
             try:
                 df = pd.read_excel(p)
                 use_col = col_index if df.shape[1] > col_index else 0
@@ -116,9 +119,12 @@ def load_dim_options(filename: str, default=None, col_index: int = 1) -> list[st
                         out.append(v)
                 if out:
                     return out
-            except Exception:
-                pass
+            except Exception as e:
+                logging.warning(f"Failed to load '%s' from '%s': %s. Using fallback list.", filename, p, e)
+    if not found_any:
+        logging.warning("Could not find '%s' in any search path. Using fallback list.", filename)
     return (default or [])
+
 
 def init_ticket_store():
     if "tickets_df" not in st.session_state:
@@ -314,7 +320,7 @@ else:
                     with sub_r:
                         st.markdown("<div style='height:1.9rem;'></div>", unsafe_allow_html=True)
                         if not locked_c:
-                            c_autofill = st.form_submit_button("🔍︎", help="Autofill Service ID, OLT & Kurdtel (if applicable)", use_container_width=True)
+                            c_autofill = st.form_submit_button("🔍︎", help="Fetch and autofill related details", use_container_width=True)
                         else:
                             c_remove = st.form_submit_button("❌︎", use_container_width=True)
                     # Handle button actions
@@ -482,7 +488,7 @@ else:
                     with sub_r:
                         st.markdown("<div style='height:1.9rem;'></div>", unsafe_allow_html=True)
                         if not locked_o:
-                            o_autofill = st.form_submit_button("🔍︎", help="Autofill City, FTTG & Address", use_container_width=True)
+                            o_autofill = st.form_submit_button("🔍︎", help="Fetch and autofill related details", use_container_width=True)
                         else:
                             o_remove = st.form_submit_button("❌︎", use_container_width=True)
                 with or1c2:
