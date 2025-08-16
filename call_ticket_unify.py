@@ -3,8 +3,9 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 import logging
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode, DataReturnMode
 
-st.set_page_config(page_title="UI Prototype", layout="wide")
+st.set_page_config(page_title="CALL_TICKET_UNIFY", layout="wide")
 
 # --- Helper: color missing field labels in red (post-submit) ---
 def _color_missing_labels(label_texts):
@@ -115,8 +116,7 @@ def load_dim_options(filename: str, default=None, col_index: int = 1) -> list[st
 def init_ticket_store():
     if "tickets_df" not in st.session_state:
         st.session_state.tickets_df = pd.DataFrame(columns=[
-            "id", "created_at", "ticket_group", "ont_id", "type_of_call", "description", "activity_enquiry_type", "complaint_type", "employee_suggestion", "device_location", "root_cause", "ont_model", "complaint_status", "kurdtel_service_status", "osp_type", "city", "issue_type", "fttg", "olt", "second_number", "assigned_to", "address"
-        ])
+            "id", "created_at", "ticket_group", "ont_id", "type_of_call", "description", "activity_enquiry_type", "complaint_type", "employee_suggestion", "device_location", "root_cause", "ont_model", "complaint_status", "kurdtel_service_status", "osp_type", "city", "issue_type", "fttg", "olt", "second_number", "assigned_to", "address", "fttx_job_status", "fttx_job_remarks", "fttx_cancel_reason", "callback_status", "callback_reason", "followup_status"])
     if "ticket_seq" not in st.session_state:
         st.session_state.ticket_seq = 1
 
@@ -128,24 +128,22 @@ def add_ticket(row: dict):
     st.session_state.tickets_df = pd.concat([st.session_state.tickets_df, pd.DataFrame([row])], ignore_index=True)
 
 # Load dropdown options from Excel (second column), with graceful fallbacks
-ACTIVITY_TYPES = load_dim_options("cx_dim_activity_enquiry_type.xlsx", ["General Inquiry", "Billing", "Technical", "Follow-up"])
-CALL_TYPES     = load_dim_options("cx_dim_call_type.xlsx", ["Inbound", "Outbound", "Callback"])
-COMPLAINT_TYPES= load_dim_options("cx_dim_complaint_type.xlsx", ["Billing", "Connectivity", "Speed", "Other"])
-EMP_SUGGESTION = load_dim_options("cx_dim_employee_suggestion.xlsx", ["Escalate", "Schedule OSP", "Remote Fix", "Replace ONT"])
-DEVICE_LOC     = load_dim_options("cx_dim_device_location.xlsx", ["Living Room", "Bedroom", "Office", "Other"])
-ROOT_CAUSE     = load_dim_options("cx_dim_root_cause.xlsx", ["Power", "Fiber Cut", "Config", "Unknown"])
-ONT_MODELS     = load_dim_options("cx_dim_ont_model.xlsx", ["ZTE F680", "Huawei HG8245", "Nokia XS-010X-Q"])
-COMP_STATUS    = load_dim_options("cx_dim_complaint_status.xlsx", ["Open", "In Progress", "Pending Customer", "Closed"])
-
-# New dropdowns for OSP
-CITY_OPTIONS   = load_dim_options("cx_dim_city.xlsx", [])
-ISSUE_TYPES    = load_dim_options("cx_dim_issue_type.xlsx", [])
-
-# NEW: Kurdtel service status options
+ACTIVITY_TYPES         = load_dim_options("cx_dim_activity_enquiry_type.xlsx", ["General Inquiry", "Billing", "Technical", "Follow-up"])
+CALL_TYPES             = load_dim_options("cx_dim_call_type.xlsx", ["Inbound", "Outbound", "Callback"])
+COMPLAINT_TYPES        = load_dim_options("cx_dim_complaint_type.xlsx", ["Billing", "Connectivity", "Speed", "Other"])
+EMP_SUGGESTION         = load_dim_options("cx_dim_employee_suggestion.xlsx", ["Escalate", "Schedule OSP", "Remote Fix", "Replace ONT"])
+DEVICE_LOC             = load_dim_options("cx_dim_device_location.xlsx", ["Living Room", "Bedroom", "Office", "Other"])
+ROOT_CAUSE             = load_dim_options("cx_dim_root_cause.xlsx", ["Power", "Fiber Cut", "Config", "Unknown"])
+ONT_MODELS             = load_dim_options("cx_dim_ont_model.xlsx", ["ZTE F680", "Huawei HG8245", "Nokia XS-010X-Q"])
+COMP_STATUS            = load_dim_options("cx_dim_complaint_status.xlsx", ["Open", "In Progress", "Pending Customer", "Closed"])
+CITY_OPTIONS           = load_dim_options("cx_dim_city.xlsx", [])
+ISSUE_TYPES            = load_dim_options("cx_dim_issue_type.xlsx", [])
 KURDTEL_SERVICE_STATUS = load_dim_options("cx_dim_kurdtel_service_status.xlsx", [])
-
-# Assignees
-ASSIGNED_TO    = load_dim_options("cx_dim_assigned_to.xlsx", [])
+ASSIGNED_TO            = load_dim_options("cx_dim_assigned_to.xlsx", [])
+FTTX_JOB_STATUS        = load_dim_options("cx_dim_fttx_job_status.xlsx", ["In Progress", "Completed", "Cancelled"])
+CALLBACK_STATUS        = load_dim_options("cx_dim_callback_status.xlsx", [])
+CALLBACK_REASON        = load_dim_options("cx_dim_callback_reason.xlsx", [])
+FOLLOWUP_STATUS        = load_dim_options("cx_dim_followup_status.xlsx", [])
 
 # OSP types (removed "Sub-Districts Interface")
 OSP_TYPES = [
@@ -158,6 +156,139 @@ FTTG_OPTIONS = ["Yes", "No"]
 
 init_ticket_store()
 
+# ====================== EDIT HELPERS ======================
+def _get_row_by_id(_id: int):
+    df = st.session_state.tickets_df
+    if df.empty or "id" not in df.columns:
+        return None, None
+    idx = df.index[df["id"] == _id]
+    if len(idx) == 0:
+        return None, None
+    i = idx[0]
+    return i, df.loc[i].to_dict()
+
+def _update_row(i, patch: dict):
+    df = st.session_state.tickets_df.copy()
+    for k, v in patch.items():
+        if k in df.columns:
+            df.at[i, k] = v
+    st.session_state.tickets_df = df
+
+@st.dialog("View / Edit Ticket")
+def edit_ticket_dialog(ticket_id: int):
+    i, row = _get_row_by_id(ticket_id)
+    if row is None:
+        st.error("Ticket not found.")
+        return
+
+    st.caption(f"Ticket ID: {row.get('id')} · Created: {row.get('created_at')} · Group: {row.get('ticket_group')}")
+
+    with st.form(f"edit_form_{ticket_id}"):
+        g = row.get("ticket_group")
+
+        # Common fields across groups
+        ont = st.text_input("ONT ID", value=str(row.get("ont_id") or ""))
+        type_call = st.selectbox("Type of Call", CALL_TYPES, index=(CALL_TYPES.index(row["type_of_call"]) if row.get("type_of_call") in CALL_TYPES else None), placeholder="")
+        assigned = st.selectbox("Assigned To", ASSIGNED_TO, index=(ASSIGNED_TO.index(row["assigned_to"]) if row.get("assigned_to") in ASSIGNED_TO else None), placeholder="")
+
+        # Group-specific
+        updates = {}
+        if g == "Activities & Inquiries":
+            act = st.selectbox("Type of Activity & Inquiries", ACTIVITY_TYPES, index=(ACTIVITY_TYPES.index(row["activity_enquiry_type"]) if row.get("activity_enquiry_type") in ACTIVITY_TYPES else None), placeholder="")
+            desc = st.text_area("Description", value=str(row.get("description") or ""), height=120)
+            updates.update({
+                "activity_enquiry_type": act,
+                "description": desc,
+            })
+        elif g == "Complaints":
+            comp = st.selectbox("Type of Complaint", COMPLAINT_TYPES, index=(COMPLAINT_TYPES.index(row["complaint_type"]) if row.get("complaint_type") in COMPLAINT_TYPES else None), placeholder="")
+            emp = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=(EMP_SUGGESTION.index(row["employee_suggestion"]) if row.get("employee_suggestion") in EMP_SUGGESTION else None), placeholder="")
+            status = st.selectbox("Complaint Status", COMP_STATUS, index=(COMP_STATUS.index(row["complaint_status"]) if row.get("complaint_status") in COMP_STATUS else None), placeholder="")
+            root = st.selectbox("Root Cause", ROOT_CAUSE, index=(ROOT_CAUSE.index(row["root_cause"]) if row.get("root_cause") in ROOT_CAUSE else None), placeholder="")
+            model = st.selectbox("ONT Model", ONT_MODELS, index=(ONT_MODELS.index(row["ont_model"]) if row.get("ont_model") in ONT_MODELS else None), placeholder="")
+            devloc = st.selectbox("Device Location", DEVICE_LOC, index=(DEVICE_LOC.index(row["device_location"]) if row.get("device_location") in DEVICE_LOC else None), placeholder="")
+            olt = st.text_input("OLT", value=str(row.get("olt") or ""))
+            second = st.text_input("Second Number", value=str(row.get("second_number") or ""))
+            desc = st.text_area("Description", value=str(row.get("description") or ""), height=120)
+            kurdtel = ""
+            if row.get("complaint_type") == "Kurdtel":
+                kurdtel = st.selectbox("Kurdtel Service Status", KURDTEL_SERVICE_STATUS, index=(KURDTEL_SERVICE_STATUS.index(row["kurdtel_service_status"]) if row.get("kurdtel_service_status") in KURDTEL_SERVICE_STATUS else None), placeholder="")
+                        # Callback / Follow-up fields
+            cb_status = st.selectbox(
+                "Call-Back Status", CALLBACK_STATUS,
+                index=(CALLBACK_STATUS.index(row["callback_status"]) if row.get("callback_status") in CALLBACK_STATUS else None),
+                placeholder=""
+            )
+            cb_reason = st.selectbox(
+                "Call-Back Reason", CALLBACK_REASON,
+                index=(CALLBACK_REASON.index(row["callback_reason"]) if row.get("callback_reason") in CALLBACK_REASON else None),
+                placeholder=""
+            )
+            fu_status = st.selectbox(
+                "Follow-Up Status", FOLLOWUP_STATUS,
+                index=(FOLLOWUP_STATUS.index(row["followup_status"]) if row.get("followup_status") in FOLLOWUP_STATUS else None),
+                placeholder=""
+            )
+            updates.update({
+                "complaint_type": comp,
+                "employee_suggestion": emp,
+                "complaint_status": status,
+                "root_cause": root,
+                "ont_model": model,
+                "device_location": devloc,
+                "olt": olt,
+                "second_number": second,
+                "description": desc,
+                "kurdtel_service_status": kurdtel if row.get("complaint_type") == "Kurdtel" else "",
+                "callback_status": cb_status,
+                "callback_reason": cb_reason,
+                "followup_status": fu_status,
+            })
+        elif g == "OSP Appointments":
+            osp = st.selectbox("OSP Appointment Type", OSP_TYPES, index=(OSP_TYPES.index(row["osp_type"]) if row.get("osp_type") in OSP_TYPES else None), placeholder="")
+            city = st.selectbox("City", CITY_OPTIONS, index=(CITY_OPTIONS.index(row["city"]) if row.get("city") in CITY_OPTIONS else None), placeholder="")
+            issue = st.selectbox("Issue Type", ISSUE_TYPES, index=(ISSUE_TYPES.index(row["issue_type"]) if row.get("issue_type") in ISSUE_TYPES else None), placeholder="")
+            fttg = st.selectbox("FTTG", FTTG_OPTIONS, index=(FTTG_OPTIONS.index(row["fttg"]) if row.get("fttg") in FTTG_OPTIONS else None), placeholder="")
+            second = st.text_input("Second Number", value=str(row.get("second_number") or ""))
+            addr = st.text_area("Address", value=str(row.get("address") or ""), height=90)
+            desc = st.text_area("Description", value=str(row.get("description") or ""), height=120)
+                        # FTTX fields (editable in edit dialog)
+            fttx_status_e = st.selectbox(
+                "FTTX Job Status", FTTX_JOB_STATUS,
+                index=(FTTX_JOB_STATUS.index(row["fttx_job_status"]) if row.get("fttx_job_status") in FTTX_JOB_STATUS else 0),
+                placeholder=""
+            )
+            fttx_remarks_e = st.text_area("FTTX Job Remarks", value=str(row.get("fttx_job_remarks") or ""), height=80)
+            st.text_input("FTTX Cancel Reason", value=str(row.get("fttx_cancel_reason") or ""), disabled=True)
+            updates.update({
+                "osp_type": osp,
+                "city": city,
+                "issue_type": issue,
+                "fttg": fttg,
+                "second_number": second,
+                "address": addr,
+                "fttx_job_status": fttx_status_e,
+                "fttx_job_remarks": fttx_remarks_e,
+                "fttx_cancel_reason": row.get("fttx_cancel_reason") or "",
+                "description": desc,
+            })
+        else:
+            # Fallback: show description
+            desc = st.text_area("Description", value=str(row.get("description") or ""), height=120)
+            updates.update({"description": desc})
+
+        save = st.form_submit_button("Save changes")
+        if save:
+            base_updates = {
+                "ont_id": ont,
+                "type_of_call": type_call,
+                "assigned_to": assigned,
+            }
+            base_updates.update(updates)
+            _update_row(i, base_updates)
+            st.session_state['_edit_open_id'] = None
+            st.success("Ticket updated.")
+            st.rerun()
 # ====================== PAGE CONTENT ======================
 
 st.subheader(st.session_state.active_tab)
@@ -362,6 +493,23 @@ else:
                         )
                 with r4c3:
                     st.empty()
+                # Disabled Call-Back / Follow-Up controls during creation
+                r5c1, r5c2, r5c3 = st.columns(3)
+                with r5c1:
+                    st.selectbox(
+                        "Call-Back Status", CALLBACK_STATUS,
+                        index=None, placeholder="", key="callback_status_c", disabled=True
+                    )
+                with r5c2:
+                    st.selectbox(
+                        "Call-Back Reason", CALLBACK_REASON,
+                        index=None, placeholder="", key="callback_reason_c", disabled=True
+                    )
+                with r5c3:
+                    st.selectbox(
+                        "Follow-Up Status", FOLLOWUP_STATUS,
+                        index=None, placeholder="", key="followup_status_c", disabled=True
+                    )
 
                 description_c = st.text_area("Description", height=100, placeholder="Describe the complaint…")
 
@@ -415,6 +563,9 @@ else:
                             "kurdtel_service_status": ks_val if ct_val == "Kurdtel" else "",
                             "olt": olt_val,
                             "second_number": sn_val,
+                            "callback_status": (st.session_state.get("callback_status_c") or ""),
+                            "callback_reason": (st.session_state.get("callback_reason_c") or ""),
+                            "followup_status": (st.session_state.get("followup_status_c") or "")
                         })
                         st.success("Complaint ticket added.")
                         st.session_state.show_new_form = False
@@ -554,32 +705,211 @@ else:
                             "address": address_val,
                             "assigned_to": assigned_o,
                         })
-                        st.success("OSP Appointment ticket added.")
+                        st.success("Complaint ticket added.")
                         st.session_state.show_new_form = False
                         st.rerun()
 
-    # ---------- Tickets table ----------
-    df = st.session_state.tickets_df.copy()
+    
+# ---------- Tickets table ----------
+df = st.session_state.tickets_df.copy()
 
-    st.markdown("### Tickets")
-    search = st.text_input("", placeholder="Search ONT / Description…", label_visibility="collapsed")
+st.markdown("### Tickets")
+search = st.text_input("Search", placeholder="Search ONT / Description…", label_visibility="collapsed")
 
-    if search:
-        s = search.lower()
-        def row_match(row):
-            fields = ["ont_id", "description", "complaint_type", "activity_enquiry_type",
-                      "kurdtel_service_status",
-                      "osp_type", "second_number", "olt", "city", "issue_type", "fttg", "assigned_to", "address"]
-            return any(str(row.get(f, "")).lower().find(s) >= 0 for f in fields)
-        df = df[df.apply(row_match, axis=1)]
+if search:
+    s = search.lower()
+    def row_match(row):
+        fields = ["ont_id", "description", "complaint_type", "activity_enquiry_type",
+                  "kurdtel_service_status",
+                  "osp_type", "second_number", "olt", "city", "issue_type", "fttg", "assigned_to", "address"]
+        return any(str(row.get(f, "")).lower().find(s) >= 0 for f in fields)
+    df = df[df.apply(row_match, axis=1)]
 
-    display_cols = [
-        "id", "created_at", "ticket_group", "ont_id", "type_of_call",
-        "activity_enquiry_type", "complaint_type", "employee_suggestion",
-        "device_location", "root_cause", "ont_model", "complaint_status",
-        "kurdtel_service_status",
-        "osp_type", "city", "issue_type", "fttg", "olt", "second_number", "assigned_to", "address", "description"
-    ]
-    display_cols = [c for c in display_cols if c in df.columns]
+display_cols = [
+    "id", "created_at", "ticket_group", "ont_id", "type_of_call",
+    "activity_enquiry_type", "complaint_type", "employee_suggestion",
+    "device_location", "root_cause", "ont_model", "complaint_status", "callback_status", "callback_reason", "followup_status",
+    "kurdtel_service_status",
+    "osp_type", "city", "issue_type", "fttg", "olt", "second_number",
+    "fttx_job_status", "assigned_to", "fttx_cancel_reason",
+    "address", "description", "fttx_job_remarks"
+]
+display_cols = [c for c in display_cols if c in df.columns]
 
-    st.dataframe(df[display_cols].sort_values("id", ascending=False), use_container_width=True)
+df_sorted = df[display_cols].sort_values("id", ascending=False).reset_index(drop=True)
+
+# View df + hidden column for inline edit trigger
+df_view = df_sorted.copy()
+if "id" in df_view.columns:
+    df_view["id"] = df_view["id"].astype(str)  # stable typing for aggrid
+df_view.insert(0, "Edit", "")
+if "_edit_request" not in df_view.columns:
+    df_view["_edit_request"] = ""
+
+# ---- AG Grid table with inline Edit button ----
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode, DataReturnMode
+
+gb = GridOptionsBuilder.from_dataframe(df_view, enableRowGroup=False, enableValue=False, enablePivot=False)
+gb.configure_default_column(editable=False, resizable=True, filter=True, flex=1)
+
+# Long text wrap / auto height
+if "description" in df_view.columns:
+    gb.configure_column("description", wrapText=True, autoHeight=True)
+if "address" in df_view.columns:
+    gb.configure_column("address", wrapText=True, autoHeight=True)
+
+# Useful widths
+gb.configure_column("id", width=110)
+gb.configure_column("created_at", minWidth=170)
+gb.configure_column("ticket_group", minWidth=170)
+gb.configure_column("ont_id", minWidth=150)
+gb.configure_column("type_of_call", minWidth=140)
+gb.configure_column("activity_enquiry_type", minWidth=180)
+gb.configure_column("complaint_type", minWidth=160)
+gb.configure_column("assigned_to", minWidth=150)
+
+# Friendly headers to match form labels
+_header_labels = {
+    "id": "Ticket ID",
+    "created_at": "Created At",
+    "ticket_group": "Ticket Group",
+    "ont_id": "ONT ID",
+    "type_of_call": "Type of Call",
+    "activity_enquiry_type": "Type of Activity & Inquiries",
+    "complaint_type": "Type of Complaint",
+    "employee_suggestion": "Employee Suggestion",
+    "device_location": "Device Location",
+    "root_cause": "Root Cause",
+    "ont_model": "ONT Model",
+    "complaint_status": "Complaint Status",
+    "kurdtel_service_status": "Kurdtel Service Status",
+    "osp_type": "OSP Appointment Type",
+    "city": "City",
+    "issue_type": "Issue Type",
+    "fttg": "FTTG",
+    "olt": "OLT",
+    "second_number": "Second Number",
+    "assigned_to": "Assigned To",
+    "address": "Address",
+    "description": "Description",
+    "fttx_job_status": "FTTX Job Status",
+    "fttx_job_remarks": "FTTX Job Remarks",
+    "fttx_cancel_reason": "FTTX Cancel Reason",
+    "callback_status": "Call-Back Status",
+    "callback_reason": "Call-Back Reason",
+    "followup_status": "Follow-Up Status"
+}
+for _col, _label in _header_labels.items():
+    if _col in df_view.columns:
+        gb.configure_column(_col, headerName=_label)
+
+
+
+# Hide the trigger column
+gb.configure_column("_edit_request", hide=True)
+
+# Edit column with clickable ✏️ icon
+gb.configure_column(
+    "Edit",
+    headerName="",
+    pinned="left",
+    width=60,
+    # turn OFF filtering/sorting/menu just for this column
+    filter=False,
+    sortable=False,
+    suppressMenu=True,
+    floatingFilter=False,
+    resizable=False,
+    cellRenderer=JsCode("""
+        class IconCellRenderer {
+          init(params){
+            const id = params && params.data ? params.data.id : null;
+            const span = document.createElement('span');
+            span.className = 'edit-icon';
+            span.textContent = '✏️';
+            span.style.cursor = 'pointer';
+            span.addEventListener('click', () => {
+              try {
+                if (params && params.node) {
+                  params.node.setDataValue('_edit_request', String(id ?? '') + '|' + String(Date.now()));
+                  params.api.dispatchEvent({ type: 'modelUpdated' });
+                }
+              } catch(e) {}
+            });
+            this.eGui = span;
+          }
+          getGui(){ return this.eGui; }
+        }
+    """),
+)
+# Sizing hook
+gb.configure_grid_options(
+    onFirstDataRendered=JsCode("""
+        function(params){
+          try { params.api.sizeColumnsToFit(); } catch(e){}
+          try { setTimeout(function(){ params.api.resetRowHeights(); }, 0); } catch(e){}
+        }
+    """),
+)
+
+grid_options = gb.build()
+
+grid_resp = AgGrid(
+    df_view,
+    gridOptions=grid_options,
+    height=520,
+    fit_columns_on_grid_load=False,
+    update_mode=GridUpdateMode.MODEL_CHANGED,
+    data_return_mode=DataReturnMode.AS_INPUT,
+    allow_unsafe_jscode=True,
+    theme="balham",
+)
+
+# Detect which row asked to edit and open dialog
+try:
+    _data = grid_resp.get('data') if grid_resp else None
+    if _data is not None:
+        import pandas as _pd
+        if isinstance(_data, _pd.DataFrame):
+            rows = _data.to_dict(orient="records")
+        elif isinstance(_data, list):
+            rows = _data
+        else:
+            rows = []
+        _candidates = [r for r in rows if str(r.get('_edit_request', '')).strip() not in ('', '0', 'false', 'None')]
+        def _token_ts(flag):
+            try:
+                s = str(flag)
+                return float(s.split('|', 1)[1]) if '|' in s else 0.0
+            except Exception:
+                return 0.0
+        req = max(_candidates, key=lambda r: _token_ts(r.get('_edit_request')), default=None)
+        if req:
+            _flag = str(req.get('_edit_request', '')).strip()
+            # coerce id
+            _rid = req.get('id')
+            def _coerce_int(v):
+                try: return int(v)
+                except Exception:
+                    try:
+                        if isinstance(v, list) and v:
+                            return int(str(v[0]).strip().strip("[]'\" "))
+                    except Exception:
+                        pass
+                    try:
+                        s = str(v).strip()
+                        if s.startswith('[') and s.endswith(']'):
+                            s = s.strip('[]').strip().strip("'\"")
+                        return int(float(s))
+                    except Exception:
+                        return None
+            _tid = _coerce_int(_rid)
+            if _tid is not None:
+                # open once per unique token
+                if st.session_state.get('_last_edit_token') != _flag:
+                    st.session_state['_last_edit_token'] = _flag
+                    st.session_state['_edit_open_id'] = _tid
+                    edit_ticket_dialog(_tid)
+except Exception as _e:
+    import logging as _lg
+    _lg.exception("Inline edit open failed: %s", _e)
