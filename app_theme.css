@@ -2,46 +2,63 @@
 
 /* Topbar */
 .topbar {
-  display:flex; align-items:center; justify-content:space-between;
-  background:#023058; padding:.5rem 1rem;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  background:#023058;
+  padding:.5rem 1rem;
 }
 .topbar, .topbar * { color:#fff !important; }
 .brand { font-size:1.5rem; font-weight:800; white-space:nowrap; }
 
 /* Topbar tabs */
-.tabs { display:flex; gap:.5rem; flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.tabs {
+  display:flex;
+  gap:.5rem;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
 .tab, .tab-disabled {
-  padding:.5rem 1rem; border-radius:.5rem; text-decoration:none !important;
-  user-select:none; display:inline-flex; align-items:center; gap:.5rem;
-  color:#fff !important; white-space:nowrap; flex:0 0 auto;
+  padding:.5rem 1rem;
+  border-radius:.5rem;
+  text-decoration:none !important;
+  user-select:none;
+  display:inline-flex;
+  align-items:center;
+  gap:.5rem;
+  color:#fff !important;
+  white-space:nowrap;
+  flex:0 0 auto;
 }
 .tab { cursor:pointer; }
 .tab:hover { background:rgba(255,255,255,0.10); }
 .tab-disabled { opacity:.45; cursor:not-allowed; }
-.tab-disabled:hover { background:transparent; }
 .active { background:rgba(255,255,255,0.15); font-weight:700; }
 .call-center-active { background:#E34B25 !important; }
 
-/* Material Icons */
+/* Material Icons helper */
 .material-icons {
-  font-family:'Material Icons'; font-weight:normal; font-style:normal; font-size:18px;
-  line-height:1; letter-spacing:normal; text-transform:none; display:inline-block;
-  white-space:nowrap; word-wrap:normal; direction:ltr; -webkit-font-feature-settings:'liga';
-  -webkit-font-smoothing:antialiased; vertical-align:middle;
+  font-family:'Material Icons';
+  font-weight:normal;
+  font-style:normal;
+  font-size:18px;
+  line-height:1;
+  vertical-align:middle;
 }
 
-/* Mobile truncation for long tab labels */
+/* Mobile truncation */
 @media (max-width: 640px) {
   .tab, .tab-disabled { max-width:40vw; overflow:hidden; text-overflow:ellipsis; }
 }
 
-/* Buttons */
+/* Global button style (applies to most app buttons) */
 [data-testid="stAppViewContainer"] button:not([role='tab']),
 [data-testid="stAppViewContainer"] input[type='button'],
 [data-testid="stAppViewContainer"] input[type='submit'] {
-  color:#023059 !important;
+  color:#023058 !important;
   background-color:#ffffff !important;
-  border:1px solid #023059 !important;
+  border:1px solid #023058 !important;
   font-weight:500 !important;
   border-radius:.5rem !important;
   box-shadow:none !important;
@@ -50,13 +67,75 @@
 [data-testid="stAppViewContainer"] input[type='button']:hover,
 [data-testid="stAppViewContainer"] input[type='submit']:hover {
   color:#ffffff !important;
-  background-color:#023059 !important;
-  border-color:#023059 !important;
+  background-color:#023058 !important;
+  border-color:#023058 !important;
 }
 [data-testid="stAppViewContainer"] button:not([role='tab']):active,
 [data-testid="stAppViewContainer"] input[type='button']:active,
 [data-testid="stAppViewContainer"] input[type='submit']:active {
   color:#ffffff !important;
-  background-color:#1B4266 !important;
-  border-color:#1B4266 !important;
+  background-color:#012A44 !important;
+  border-color:#012A44 !important;
 }
+
+/* Second-level subtabs (Tickets / Settings) */
+.subtabs {
+  display: flex;
+  gap: .5rem;
+  /* remove bottom padding so tab bottoms align with the bar edge */
+  padding: .5rem 1rem 0 1rem;
+  background: #F5F7FB;
+  border-bottom: 1px solid #E5E7EB;
+  align-items: flex-end; /* ensure tabs align to the bottom of the bar */
+}
+
+.subtabs a.subtab,
+.subtab {
+  padding: .35rem .85rem;
+  border-radius: .5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  text-decoration: none;
+  color: #67839B;           /* inactive color (no !important) */
+  background: transparent;
+  border: 1px solid transparent;
+  font-weight: 500;
+}
+.subtab:hover { background: #F3F4F6; }
+
+/* Active subtab: underline + text in primary color */
+.subtab.sub-active,
+.subtabs a.subtab.sub-active {
+  color: #023058 !important;
+  border-bottom: 3px solid #023058 !important;
+  border-bottom-left-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+  padding-bottom: calc(.35rem - 3px) !important;
+  font-weight: 600 !important;
+  background: transparent !important;
+}
+
+/* Prevent global button styling from affecting subtabs — do NOT override subtab text color */
+.stApp .subtabs a.subtab,
+.stApp .subtabs button,
+.stApp .subtabs input[type="button"],
+.stApp .subtabs input[type="submit"],
+.stApp .subtabs [role="button"] {
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: .35rem .85rem !important;
+  margin: 0 !important;
+  /* DO NOT set color here — allow .subtab/.sub-active rules to control text color */
+}
+
+/* Small layout tweak: reduce column gutter inside expanders */
+.streamlit-expander .stColumns { gap:6px !important; }
+
+/* Increase space after the subtab bar (use margin-bottom so it always applies) */
+.subtabs {
+  margin-bottom: 1rem !important; /* adjust value to taste (e.g. 1.5rem) */
+}
+
+/* neutralize any previous sibling rule that may conflict */
+.subtabs + * { margin-top: 0 !important; }

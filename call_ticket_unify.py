@@ -13,27 +13,22 @@ def _color_missing_labels(label_texts):
         return
     sels = []
     for lab in label_texts:
-        sels += [
-            f'label:has(+ div input[aria-label="{lab}"])',
-            f'label:has(+ div textarea[aria-label="{lab}"])',
-            f'label:has(+ div [role="combobox"][aria-label="{lab}"])',
-        ]
+        sels.append(f'label:has(+ div input[aria-label="{lab}"])')
+        sels.append(f'label:has(+ div textarea[aria-label="{lab}"])')
+        sels.append(f'label:has(+ div [role="combobox"][aria-label="{lab}"])')
     css = "<style>" + ", ".join(sels) + "{color:#dc2626 !important;font-weight:600!important;}</style>"
     st.markdown(css, unsafe_allow_html=True)
 
-# -------- Tabs and Material Icon names --------
+# Top-level tab icons
 TAB_ICONS = {
     "Home": "home",
     "Digicare Tickets": "report_problem",
-    "Call Center Tickets": "call",
-    "Requests": "article",
-    "Card": "credit_score",
-    "Client": "group",
+    "Call Center Tickets": "toc",
     "CPE": "router",
     "IVR": "support_agent",
     "Settings": "settings",
     "Admin": "build",
-    "Exit": "exit_to_app",  # icon only, no text
+    "Exit": "exit_to_app",
 }
 TAB_NAMES = list(TAB_ICONS.keys())
 
@@ -41,7 +36,7 @@ TAB_NAMES = list(TAB_ICONS.keys())
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "Call Center Tickets"
 
-# Honor query param (no deprecated API)
+# Honor query param
 if "tab" in st.query_params:
     t = st.query_params["tab"]
     if t in TAB_NAMES:
@@ -51,7 +46,7 @@ if "tab" in st.query_params:
 with open("app_theme.css") as f:
     st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-# -------- Top bar (brand left, tabs right) --------
+# -------- Top bar --------
 html = ['<div class="topbar">']
 html.append('<div class="brand">FiberCare</div>')
 html.append('<div class="tabs">')
@@ -73,6 +68,32 @@ for name in TAB_NAMES:
 
 html.append('</div></div>')
 st.markdown("".join(html), unsafe_allow_html=True)
+
+# -------- Second-level tabs (Tickets / Settings) --------
+SUBTAB_ICONS = {"Tickets": "toc", "Settings": "settings"}
+SUBTAB_NAMES = list(SUBTAB_ICONS.keys())
+
+# initialize active_subtab (default: Tickets)
+if "active_subtab" not in st.session_state:
+    st.session_state.active_subtab = "Tickets"
+
+# allow switch via query param
+if "subtab" in st.query_params:
+    q = st.query_params["subtab"]
+    if q in SUBTAB_NAMES:
+        st.session_state.active_subtab = q
+
+# build subtabs HTML
+base_tab_q = f"?tab={st.session_state.active_tab.replace(' ', '%20')}"
+sub_html = ['<div class="subtabs">']
+for name in SUBTAB_NAMES:
+    icon = f'<span class="material-icons">{SUBTAB_ICONS[name]}</span>'
+    cls = " sub-active" if st.session_state.active_subtab == name else ""
+    sub_html.append(
+        f'<a href="{base_tab_q}&subtab={name.replace(" ", "%20")}" target="_self" class="subtab{cls}">{icon} {name}</a>'
+    )
+sub_html.append('</div>')
+st.markdown("".join(sub_html), unsafe_allow_html=True)
 
 # ====================== UTILITIES ======================
 
@@ -108,7 +129,7 @@ def load_dim_options(filename: str, default=None, col_index: int = 1) -> list[st
                 if out:
                     return out
             except Exception as e:
-                logging.warning(f"Failed to load '%s' from '%s': %s. Using fallback list.", filename, p, e)
+                logging.warning("Failed to load '%s' from '%s': %s. Using fallback list.", filename, p, e)
     if not found_any:
         logging.warning("Could not find '%s' in any search path. Using fallback list.", filename)
     return (default or [])
@@ -116,7 +137,7 @@ def load_dim_options(filename: str, default=None, col_index: int = 1) -> list[st
 def init_ticket_store():
     if "tickets_df" not in st.session_state:
         st.session_state.tickets_df = pd.DataFrame(columns=[
-            "id", "created_at", "ticket_group", "ont_id", "type_of_call", "description", "activity_enquiry_type", "complaint_type", "employee_suggestion", "device_location", "root_cause", "ont_model", "complaint_status", "kurdtel_service_status", "osp_type", "city", "issue_type", "fttg", "olt", "second_number", "assigned_to", "address", "fttx_job_status", "fttx_job_remarks", "fttx_cancel_reason", "callback_status", "callback_reason", "followup_status"])
+            "id", "created_at", "ticket_group", "ont_id", "type_of_call", "description", "activity_inquiry_type", "digicare_issue_type", "complaint_type", "employee_suggestion", "device_location", "root_cause", "ont_model", "complaint_status", "kurdtel_service_status", "osp_type", "city", "issue_type", "fttg", "olt", "second_number", "assigned_to", "address", "fttx_job_status", "fttx_job_remarks", "fttx_cancel_reason", "callback_status", "callback_reason", "followup_status"])
     if "ticket_seq" not in st.session_state:
         st.session_state.ticket_seq = 1
 
@@ -128,7 +149,7 @@ def add_ticket(row: dict):
     st.session_state.tickets_df = pd.concat([st.session_state.tickets_df, pd.DataFrame([row])], ignore_index=True)
 
 # Load dropdown options from Excel (second column), with graceful fallbacks
-ACTIVITY_TYPES         = load_dim_options("cx_dim_activity_enquiry_type.xlsx", ["General Inquiry", "Billing", "Technical", "Follow-up"])
+ACTIVITY_TYPES         = load_dim_options("cx_dim_activity_inquiry_type.xlsx", ["General Inquiry", "Billing", "Technical", "Follow-up"])
 CALL_TYPES             = load_dim_options("cx_dim_call_type.xlsx", ["Inbound", "Outbound", "Callback"])
 COMPLAINT_TYPES        = load_dim_options("cx_dim_complaint_type.xlsx", ["Billing", "Connectivity", "Speed", "Other"])
 EMP_SUGGESTION         = load_dim_options("cx_dim_employee_suggestion.xlsx", ["Escalate", "Schedule OSP", "Remote Fix", "Replace ONT"])
@@ -144,6 +165,8 @@ FTTX_JOB_STATUS        = load_dim_options("cx_dim_fttx_job_status.xlsx", ["In Pr
 CALLBACK_STATUS        = load_dim_options("cx_dim_callback_status.xlsx", [])
 CALLBACK_REASON        = load_dim_options("cx_dim_callback_reason.xlsx", [])
 FOLLOWUP_STATUS        = load_dim_options("cx_dim_followup_status.xlsx", [])
+# iQ Digicare specific issue types
+DIGICARE_ISSUES        = load_dim_options("cx_dim_digicare_issue.xlsx", [])
 
 # OSP types (removed "Sub-Districts Interface")
 OSP_TYPES = [
@@ -194,10 +217,10 @@ def edit_ticket_dialog(ticket_id: int):
         # Group-specific
         updates = {}
         if g == "Activities & Inquiries":
-            act = st.selectbox("Type of Activity & Inquiries", ACTIVITY_TYPES, index=(ACTIVITY_TYPES.index(row["activity_enquiry_type"]) if row.get("activity_enquiry_type") in ACTIVITY_TYPES else None), placeholder="")
+            act = st.selectbox("Type of Activity & Inquiries", ACTIVITY_TYPES, index=(ACTIVITY_TYPES.index(row["activity_inquiry_type"]) if row.get("activity_inquiry_type") in ACTIVITY_TYPES else None), placeholder="")
             desc = st.text_area("Description", value=str(row.get("description") or ""), height=120)
             updates.update({
-                "activity_enquiry_type": act,
+                "activity_inquiry_type": act,
                 "description": desc,
             })
         elif g == "Complaints":
@@ -289,13 +312,150 @@ def edit_ticket_dialog(ticket_id: int):
             st.session_state['_edit_open_id'] = None
             st.success("Ticket updated.")
             st.rerun()
+
 # ====================== PAGE CONTENT ======================
+# If user chose Settings subtab, show settings UI
+if st.session_state.active_subtab == "Settings":
+    st.markdown("### Manage dropdowns")
+    # description removed per request
 
-st.subheader(st.session_state.active_tab)
+    DROPDOWN_CONFIGS = [
+        ("Employee Suggestion", "EMP_SUGGESTION"),
+        ("Device Location", "DEVICE_LOC"),
+        ("Root Cause", "ROOT_CAUSE"),
+        ("ONT Models", "ONT_MODELS"),
+        ("Complaint Status", "COMP_STATUS"),
+        ("City Options", "CITY_OPTIONS"),
+        ("Issue Types", "ISSUE_TYPES"),
+        ("Kurdtel Service Status", "KURDTEL_SERVICE_STATUS"),
+        ("Assigned To", "ASSIGNED_TO"),
+        ("FTTX Job Status", "FTTX_JOB_STATUS"),
+        ("Callback Status", "CALLBACK_STATUS"),
+        ("Callback Reason", "CALLBACK_REASON"),
+        ("Followup Status", "FOLLOWUP_STATUS"),
+    ]
 
+    for label, key in DROPDOWN_CONFIGS:
+        init_list_name = f"settings_{key}"
+        if init_list_name not in st.session_state:
+            st.session_state[init_list_name] = list(globals().get(key, []) or [])
+
+        vals = st.session_state[init_list_name]
+
+        # per-config message storage key (used to show messages under the value column)
+        base_msg_key = f"{key}_message"
+
+        with st.expander(label, expanded=False):
+            if not vals:
+                st.info("No items defined yet.")
+
+            # Add-new row: input first (left), action button on the right
+            new_key = f"{key}_new"
+            # ensure the input buffer exists without overwriting an existing widget value
+            st.session_state.setdefault(new_key, "")
+            # if a previous action requested the input be cleared, do it before the widget is created
+            clear_flag = f"{new_key}_clear"
+            if st.session_state.get(clear_flag):
+                st.session_state[new_key] = ""
+                try:
+                    del st.session_state[clear_flag]
+                except Exception:
+                    pass
+            # input column left, action column right
+            add_input_col, add_action_col = st.columns([11, 1])
+            with add_input_col:
+                # non-empty hidden label to avoid Streamlit label warnings
+                st.text_input(f"add_{key}", key=new_key, placeholder=f"Add new value to {label}", label_visibility="collapsed")
+
+                # show add-action message under the input column (if any)
+                _msg = st.session_state.get(base_msg_key)
+                if _msg:
+                    _lvl, _txt = _msg
+                    if _lvl == "error":
+                        st.error(_txt)
+                    elif _lvl == "warning":
+                        st.warning(_txt)
+                    else:
+                        st.success(_txt)
+
+            with add_action_col:
+                # intrinsic-size button on the right
+                if st.button("➕", key=f"{key}_add_btn", help=f"Add new to {label}", use_container_width=False):
+                    nv = (st.session_state.get(new_key) or "").strip()
+                    if not nv:
+                        st.session_state[base_msg_key] = ("error", "Enter a non-empty value.")
+                    elif nv in st.session_state[init_list_name]:
+                        st.session_state[base_msg_key] = ("warning", "Value already exists.")
+                    else:
+                        st.session_state[init_list_name].append(nv)
+                        # request that the add-input be cleared on the next rerun (safe: do not overwrite widget value now)
+                        st.session_state[f"{new_key}_clear"] = True
+                        st.session_state[base_msg_key] = ("success", "Added.")
+                        st.rerun()
+
+            # Render each existing value: action (left, narrow), value (right, wide)
+            for i in range(len(vals)):
+                edit_flag = f"{key}_editing_{i}"
+                edit_buf = f"{key}_edit_{i}"
+                item_msg_key = f"{key}_message_{i}"
+                if edit_flag not in st.session_state:
+                    st.session_state[edit_flag] = False
+                # set default buffer value without causing widget/session-state conflict
+                st.session_state.setdefault(edit_buf, vals[i])
+
+                # value column first (left), action on the right
+                value_col, action_col = st.columns([11, 1], gap="small")
+                with value_col:
+                    if st.session_state[edit_flag]:
+                        # avoid passing value= when session state already exists
+                        st.text_input(f"edit_{key}_{i}", key=edit_buf, label_visibility="collapsed")
+                    else:
+                        # show value inside a rounded, gray box so it looks disabled/read-only
+                        # expand the value box to fill the column so it matches the Add-row input width
+                        st.markdown(
+                            f"<div style='background:#f3f4f6;color:#374151;padding:8px 12px;border-radius:8px;margin:4px 0;display:block;width:100%;box-sizing:border-box;font-size:0.95rem;white-space:normal;overflow-wrap:break-word'>{vals[i]}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    # show per-item message under the value column (if any)
+                    _imsg = st.session_state.get(item_msg_key)
+                    if _imsg:
+                        _ilvl, _itxt = _imsg
+                        if _ilvl == "error":
+                            st.error(_itxt)
+                        elif _ilvl == "warning":
+                            st.warning(_itxt)
+                        else:
+                            st.success(_itxt)
+
+                with action_col:
+                    # keep intrinsic button footprint so size is stable (no use_container_width)
+                    if st.session_state[edit_flag]:
+                        if st.button("💾", key=f"{key}_save_{i}", help="Save", use_container_width=False):
+                            nv = (st.session_state.get(edit_buf) or "").strip()
+                            if nv:
+                                if i < len(st.session_state[init_list_name]):
+                                    st.session_state[init_list_name][i] = nv
+                                else:
+                                    st.session_state[init_list_name].append(nv)
+                                st.session_state[item_msg_key] = ("success", "Saved.")
+                            else:
+                                st.session_state[item_msg_key] = ("error", "Enter a non-empty value.")
+                            st.session_state[edit_flag] = False
+                            st.rerun()
+                    else:
+                        if st.button("✏️", key=f"{key}_editbtn_{i}", help="Edit", use_container_width=False):
+                            st.session_state[edit_flag] = True
+                            st.session_state[edit_buf] = vals[i]
+                            # clear any existing item message when entering edit mode
+                            st.session_state.pop(item_msg_key, None)
+                            st.rerun()
+    # prevent the rest of the page (Tickets UI / grid) from rendering when on Settings
+    st.stop()
+# original main content
 if st.session_state.active_tab != "Call Center Tickets":
     st.write("Content for this tab will go here…")
-else:
+elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.active_subtab == "Tickets":
     # Header row: only New Ticket button (left-aligned in a 3-col grid)
     with st.container():
         c1, c2, c3 = st.columns(3, gap="large")
@@ -370,6 +530,19 @@ else:
                 with ac3:
                     assigned_to_ai = st.selectbox("Assigned To", ASSIGNED_TO, index=None, placeholder="", key="assigned_to_ai")
 
+                # Row 2: conditional iQ Digicare Issue Type
+                b1, b2, b3 = st.columns(3)
+                with b1:
+                    activity_choice = st.session_state.get("sb_type_of_activity_inquiries_1")
+                    digicare_issue = ""
+                    if activity_choice == "iQ Digicare":
+                        digicare_issue = st.selectbox("iQ Digicare Issue Type", DIGICARE_ISSUES, index=None, placeholder="", key="sb_digicare_issue_1")
+                with b2:
+                    st.empty()
+                with b3:
+                    st.empty()
+
+                # description moves to row 3
                 description = st.text_area("Description", height=100, placeholder="Enter details…")
 
                 save_ai = st.form_submit_button("Save Activities & Inquiries")
@@ -390,13 +563,14 @@ else:
                         st.error("Please fill required fields: " + ", ".join(missing))
                     else:
                         add_ticket({
-                            "ticket_group": "Activities & Inquiries",
-                            "ont_id": st.session_state["ont_ai"],
-                            "type_of_call": call_type,
-                            "description": description,
-                            "activity_enquiry_type": activity_type_val,
-                            "assigned_to": assigned_ai,
-                        })
+                                "ticket_group": "Activities & Inquiries",
+                                "ont_id": st.session_state["ont_ai"],
+                                "type_of_call": call_type,
+                                "description": description,
+                                "activity_inquiry_type": activity_type_val,
+                                "digicare_issue_type": st.session_state.get("sb_digicare_issue_1", "") if activity_type_val == "iQ Digicare" else "",
+                                "assigned_to": assigned_ai,
+                            })
                         st.success("Activities & Inquiries ticket added.")
                         st.session_state.show_new_form = False
                         st.rerun()
@@ -431,34 +605,34 @@ else:
                             c_autofill = st.form_submit_button("🔍︎", help="Fetch and autofill related details", use_container_width=True)
                         else:
                             c_remove = st.form_submit_button("❌︎", use_container_width=True)
-                    if not locked_c:
-                        if "c_autofill" in locals() and c_autofill:
-                            if st.session_state.get("ont_c", "").strip():
-                                st.session_state["olt_c"] = "xxxx-xxx-xxx-xxx-xx"
-                                try:
-                                    st.session_state["ont_model"] = ONT_MODELS[0] if ONT_MODELS else ""
-                                except Exception:
-                                    st.session_state["ont_model"] = ""
-                                st.session_state["olt_c_filled"] = True
-                                st.session_state["ont_c_locked"] = True
-                                try:
-                                    if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
-                                        st.session_state["kurdtel_status_c"] = KURDTEL_SERVICE_STATUS[0] if KURDTEL_SERVICE_STATUS else ""
-                                except Exception:
-                                    st.session_state["kurdtel_status_c"] = st.session_state.get("kurdtel_status_c", "")
-                                st.session_state["autofill_message_c"] = "Fields autofilled."
-                                st.session_state["autofill_level_c"] = "info"
-                                st.rerun()
-                            else:
-                                st.session_state["autofill_message_c"] = "Enter ONT ID first."
-                                st.session_state["autofill_level_c"] = "warning"
-                                st.rerun()
-                    else:
-                        if "c_remove" in locals() and c_remove:
-                            st.session_state["c_pending_clear"] = True
-                            st.session_state["autofill_message_c"] = "Cleared autofill."
+                if not locked_c:
+                    if "c_autofill" in locals() and c_autofill:
+                        if st.session_state.get("ont_c", "").strip():
+                            st.session_state["olt_c"] = "xxxx-xxx-xxx-xxx-xx"
+                            try:
+                                st.session_state["ont_model"] = ONT_MODELS[0] if ONT_MODELS else ""
+                            except Exception:
+                                st.session_state["ont_model"] = ""
+                            st.session_state["olt_c_filled"] = True
+                            st.session_state["ont_c_locked"] = True
+                            try:
+                                if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
+                                    st.session_state["kurdtel_status_c"] = KURDTEL_SERVICE_STATUS[0] if KURDTEL_SERVICE_STATUS else ""
+                            except Exception:
+                                st.session_state["kurdtel_status_c"] = st.session_state.get("kurdtel_status_c", "")
+                            st.session_state["autofill_message_c"] = "Fields autofilled."
                             st.session_state["autofill_level_c"] = "info"
                             st.rerun()
+                        else:
+                            st.session_state["autofill_message_c"] = "Enter ONT ID first."
+                            st.session_state["autofill_level_c"] = "warning"
+                            st.rerun()
+                else:
+                    if "c_remove" in locals() and c_remove:
+                        st.session_state["c_pending_clear"] = True
+                        st.session_state["autofill_message_c"] = "Cleared autofill."
+                        st.session_state["autofill_level_c"] = "info"
+                        st.rerun()
 
                 with r1c2:
                     employee_suggestion = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=None, placeholder="", key="sb_employee_suggestion_1")
@@ -633,83 +807,81 @@ else:
                         st.session_state["autofill_level_o"] = "info"
                         st.rerun()
 
-                or2c1, or2c2, or2c3 = st.columns(3)
-                with or2c1:
-                    issue_type_o = st.selectbox(
-                        "Issue Type",
-                        ISSUE_TYPES, index=None, placeholder=""
-                    )
-                with or2c2:
-                    fttg_val = st.selectbox(
-                        "FTTG",
-                        FTTG_OPTIONS, index=None, placeholder="",
-                        key="fttg_o", disabled=True
-                    )
-                with or2c3:
-                    city_val = st.selectbox(
-                        "City",
-                        CITY_OPTIONS, index=None, placeholder="",
-                        key="city_o", disabled=True
-                    )
+                    or2c1, or2c2, or2c3 = st.columns(3)
+                    with or2c1:
+                        issue_type_o = st.selectbox(
+                            "Issue Type",
+                            ISSUE_TYPES, index=None, placeholder=""
+                        )
+                    with or2c2:
+                        fttg_val = st.selectbox(
+                            "FTTG",
+                            FTTG_OPTIONS, index=None, placeholder="",
+                            key="fttg_o", disabled=True
+                        )
+                    with or2c3:
+                        city_val = st.selectbox(
+                            "City",
+                            CITY_OPTIONS, index=None, placeholder="",
+                            key="city_o", disabled=True
+                        )
 
-                or3c1, or3c2, or3c3 = st.columns(3)
-                with or3c1:
-                    assigned_to_o = st.selectbox("Assigned To", ASSIGNED_TO, index=None, placeholder="", key="assigned_to_o")
-                with or3c2:
-                    st.empty()
-                with or3c3:
-                    st.empty()
+                    or3c1, or3c2, or3c3 = st.columns(3)
+                    with or3c1:
+                        assigned_to_o = st.selectbox("Assigned To", ASSIGNED_TO, index=None, placeholder="", key="assigned_to_o")
+                    with or3c2:
+                        st.empty()
+                    with or3c3:
+                        st.empty()
 
-                address_o = st.text_area("Address", height=80, placeholder="Click 🔍︎ to auto fill", key="address_o")
-                description_o = st.text_area("Description", height=100, placeholder="Describe the appointment…")
+                    address_o = st.text_area("Address", height=80, placeholder="Click 🔍︎ to auto fill", key="address_o")
+                    description_o = st.text_area("Description", height=100, placeholder="Describe the appointment…")
 
-                submitted_o = st.form_submit_button("Save OSP Appointment")
-                if submitted_o:
-                    missing = []
+                    submitted_o = st.form_submit_button("Save OSP Appointment")
+                    if submitted_o:
+                        missing = []
 
-                    osp_val   = st.session_state.get("sb_osp_appointment_type_1")
-                    ont_val   = st.session_state.get("ont_o", "").strip()
-                    city_sel  = st.session_state.get("city_o", "").strip()
-                    sn_val    = str(second_number_o).strip() if "second_number_o" in locals() else ""
-                    issue_sel = issue_type_o if "issue_type_o" in locals() else None
-                    call_sel  = call_type_o if "call_type_o" in locals() else None
-                    fttg_sel  = st.session_state.get("fttg_o", "").strip()
-                    desc_val  = str(description_o or "").strip()
-                    address_val = str(st.session_state.get("address_o", "")).strip()
-                    assigned_o = st.session_state.get("assigned_to_o") or (ASSIGNED_TO[0] if ASSIGNED_TO else "")
+                        osp_val   = st.session_state.get("sb_osp_appointment_type_1")
+                        ont_val   = st.session_state.get("ont_o", "").strip()
+                        city_sel  = st.session_state.get("city_o", "").strip()
+                        sn_val    = str(second_number_o).strip() if "second_number_o" in locals() else ""
+                        issue_sel = issue_type_o if "issue_type_o" in locals() else None
+                        call_sel  = call_type_o if "call_type_o" in locals() else None
+                        fttg_sel  = st.session_state.get("fttg_o", "").strip()
+                        desc_val  = str(description_o or "").strip()
+                        address_val = str(st.session_state.get("address_o", "")).strip()
+                        assigned_o = st.session_state.get("assigned_to_o") or (ASSIGNED_TO[0] if ASSIGNED_TO else "")
 
-                    if not osp_val:  missing.append("OSP Appointment Type")
-                    if not ont_val:  missing.append("ONT ID")
-                    if not city_sel: missing.append("City")
-                    if not sn_val:   missing.append("Second Number")
-                    if not issue_sel:missing.append("Issue Type")
-                    if not call_sel: missing.append("Type of Call")
-                    if not fttg_sel: missing.append("FTTG")
-                    if not desc_val: missing.append("Description")
-                    if not address_val: missing.append("Address")
+                        if not osp_val:  missing.append("OSP Appointment Type")
+                        if not ont_val:  missing.append("ONT ID")
+                        if not city_sel: missing.append("City")
+                        if not sn_val:   missing.append("Second Number")
+                        if not issue_sel:missing.append("Issue Type")
+                        if not call_sel: missing.append("Type of Call")
+                        if not fttg_sel: missing.append("FTTG")
+                        if not desc_val: missing.append("Description")
+                        if not address_val: missing.append("Address")
 
-                    if missing:
-                        _color_missing_labels(missing)
-                        st.error("Please fill in all required fields: " + ", ".join(missing))
-                    else:
-                        add_ticket({
-                            "ticket_group": "OSP Appointments",
-                            "osp_type": osp_val,
-                            "ont_id": ont_val,
-                            "city": city_sel,
-                            "second_number": sn_val,
-                            "issue_type": issue_sel,
-                            "type_of_call": call_sel,
-                            "fttg": fttg_sel,
-                            "description": desc_val,
-                            "address": address_val,
-                            "assigned_to": assigned_o,
-                        })
-                        st.success("Complaint ticket added.")
-                        st.session_state.show_new_form = False
-                        st.rerun()
-
-    
+                        if missing:
+                            _color_missing_labels(missing)
+                            st.error("Please fill in all required fields: " + ", ".join(missing))
+                        else:
+                            add_ticket({
+                                "ticket_group": "OSP Appointments",
+                                "osp_type": osp_val,
+                                "ont_id": ont_val,
+                                "city": city_sel,
+                                "second_number": sn_val,
+                                "issue_type": issue_sel,
+                                "type_of_call": call_sel,
+                                "fttg": fttg_sel,
+                                "description": desc_val,
+                                "address": address_val,
+                                "assigned_to": assigned_o,
+                            })
+                            st.success("Complaint ticket added.")
+                            st.session_state.show_new_form = False
+                            st.rerun()
 # ---------- Tickets table ----------
 df = st.session_state.tickets_df.copy()
 
@@ -719,197 +891,251 @@ search = st.text_input("Search", placeholder="Search ONT / Description…", labe
 if search:
     s = search.lower()
     def row_match(row):
-        fields = ["ont_id", "description", "complaint_type", "activity_enquiry_type",
+        fields = ["ont_id", "description", "complaint_type", "activity_inquiry_type",
                   "kurdtel_service_status",
                   "osp_type", "second_number", "olt", "city", "issue_type", "fttg", "assigned_to", "address"]
         return any(str(row.get(f, "")).lower().find(s) >= 0 for f in fields)
     df = df[df.apply(row_match, axis=1)]
 
-display_cols = [
-    "id", "created_at", "ticket_group", "ont_id", "type_of_call",
-    "activity_enquiry_type", "complaint_type", "employee_suggestion",
-    "device_location", "root_cause", "ont_model", "complaint_status", "callback_status", "callback_reason", "followup_status",
-    "kurdtel_service_status",
-    "osp_type", "city", "issue_type", "fttg", "olt", "second_number",
-    "fttx_job_status", "assigned_to", "fttx_cancel_reason",
-    "address", "description", "fttx_job_remarks"
-]
-display_cols = [c for c in display_cols if c in df.columns]
 
-df_sorted = df[display_cols].sort_values("id", ascending=False).reset_index(drop=True)
+def _render_tickets_grid(df_input, ag_key: str | None = None):
+    # Build display columns, keep same ordering as before
+    display_cols = [
+        "id", "created_at", "ticket_group", "ont_id", "type_of_call",
+        "activity_inquiry_type", "complaint_type", "employee_suggestion",
+        "device_location", "root_cause", "ont_model", "complaint_status", "callback_status", "callback_reason", "followup_status",
+        "kurdtel_service_status",
+        "osp_type", "city", "issue_type", "fttg", "olt", "second_number",
+        "fttx_job_status", "assigned_to", "fttx_cancel_reason",
+        "address", "description", "fttx_job_remarks"
+    ]
+    display_cols = [c for c in display_cols if c in df_input.columns]
 
-# View df + hidden column for inline edit trigger
-df_view = df_sorted.copy()
-if "id" in df_view.columns:
-    df_view["id"] = df_view["id"].astype(str)  # stable typing for aggrid
-df_view.insert(0, "Edit", "")
-if "_edit_request" not in df_view.columns:
-    df_view["_edit_request"] = ""
-
-# ---- AG Grid table with inline Edit button ----
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode, DataReturnMode
-
-gb = GridOptionsBuilder.from_dataframe(df_view, enableRowGroup=False, enableValue=False, enablePivot=False)
-gb.configure_default_column(editable=False, resizable=True, filter=True, flex=1)
-
-# Long text wrap / auto height
-if "description" in df_view.columns:
-    gb.configure_column("description", wrapText=True, autoHeight=True)
-if "address" in df_view.columns:
-    gb.configure_column("address", wrapText=True, autoHeight=True)
-
-# Useful widths
-gb.configure_column("id", width=110)
-gb.configure_column("created_at", minWidth=170)
-gb.configure_column("ticket_group", minWidth=170)
-gb.configure_column("ont_id", minWidth=150)
-gb.configure_column("type_of_call", minWidth=140)
-gb.configure_column("activity_enquiry_type", minWidth=180)
-gb.configure_column("complaint_type", minWidth=160)
-gb.configure_column("assigned_to", minWidth=150)
-
-# Friendly headers to match form labels
-_header_labels = {
-    "id": "Ticket ID",
-    "created_at": "Created At",
-    "ticket_group": "Ticket Group",
-    "ont_id": "ONT ID",
-    "type_of_call": "Type of Call",
-    "activity_enquiry_type": "Type of Activity & Inquiries",
-    "complaint_type": "Type of Complaint",
-    "employee_suggestion": "Employee Suggestion",
-    "device_location": "Device Location",
-    "root_cause": "Root Cause",
-    "ont_model": "ONT Model",
-    "complaint_status": "Complaint Status",
-    "kurdtel_service_status": "Kurdtel Service Status",
-    "osp_type": "OSP Appointment Type",
-    "city": "City",
-    "issue_type": "Issue Type",
-    "fttg": "FTTG",
-    "olt": "OLT",
-    "second_number": "Second Number",
-    "assigned_to": "Assigned To",
-    "address": "Address",
-    "description": "Description",
-    "fttx_job_status": "FTTX Job Status",
-    "fttx_job_remarks": "FTTX Job Remarks",
-    "fttx_cancel_reason": "FTTX Cancel Reason",
-    "callback_status": "Call-Back Status",
-    "callback_reason": "Call-Back Reason",
-    "followup_status": "Follow-Up Status"
-}
-for _col, _label in _header_labels.items():
-    if _col in df_view.columns:
-        gb.configure_column(_col, headerName=_label)
-
-
-
-# Hide the trigger column
-gb.configure_column("_edit_request", hide=True)
-
-# Edit column with clickable ✏️ icon
-gb.configure_column(
-    "Edit",
-    headerName="",
-    pinned="left",
-    width=60,
-    # turn OFF filtering/sorting/menu just for this column
-    filter=False,
-    sortable=False,
-    suppressMenu=True,
-    floatingFilter=False,
-    resizable=False,
-    cellRenderer=JsCode("""
-        class IconCellRenderer {
-          init(params){
-            const id = params && params.data ? params.data.id : null;
-            const span = document.createElement('span');
-            span.className = 'edit-icon';
-            span.textContent = '✏️';
-            span.style.cursor = 'pointer';
-            span.addEventListener('click', () => {
-              try {
-                if (params && params.node) {
-                  params.node.setDataValue('_edit_request', String(id ?? '') + '|' + String(Date.now()));
-                  params.api.dispatchEvent({ type: 'modelUpdated' });
-                }
-              } catch(e) {}
-            });
-            this.eGui = span;
-          }
-          getGui(){ return this.eGui; }
-        }
-    """),
-)
-# Sizing hook
-gb.configure_grid_options(
-    onFirstDataRendered=JsCode("""
-        function(params){
-          try { params.api.sizeColumnsToFit(); } catch(e){}
-          try { setTimeout(function(){ params.api.resetRowHeights(); }, 0); } catch(e){}
-        }
-    """),
-)
-
-grid_options = gb.build()
-
-grid_resp = AgGrid(
-    df_view,
-    gridOptions=grid_options,
-    height=520,
-    fit_columns_on_grid_load=False,
-    update_mode=GridUpdateMode.MODEL_CHANGED,
-    data_return_mode=DataReturnMode.AS_INPUT,
-    allow_unsafe_jscode=True,
-    theme="balham",
-)
-
-# Detect which row asked to edit and open dialog
-try:
-    _data = grid_resp.get('data') if grid_resp else None
-    if _data is not None:
-        import pandas as _pd
-        if isinstance(_data, _pd.DataFrame):
-            rows = _data.to_dict(orient="records")
-        elif isinstance(_data, list):
-            rows = _data
+    # Some data sources (or an empty store) may not have an 'id' column yet.
+    # Try to sort by 'id' when present; otherwise fall back to a safe deterministic order
+    try:
+        if "id" in display_cols:
+            df_sorted = df_input[display_cols].sort_values("id", ascending=False).reset_index(drop=True)
         else:
-            rows = []
-        _candidates = [r for r in rows if str(r.get('_edit_request', '')).strip() not in ('', '0', 'false', 'None')]
-        def _token_ts(flag):
-            try:
-                s = str(flag)
-                return float(s.split('|', 1)[1]) if '|' in s else 0.0
-            except Exception:
-                return 0.0
-        req = max(_candidates, key=lambda r: _token_ts(r.get('_edit_request')), default=None)
-        if req:
-            _flag = str(req.get('_edit_request', '')).strip()
-            # coerce id
-            _rid = req.get('id')
-            def _coerce_int(v):
-                try: return int(v)
+            # ensure we still include an 'id' column for downstream logic
+            df_sorted = df_input[display_cols].reset_index(drop=True)
+            if "id" not in df_sorted.columns:
+                df_sorted.insert(0, "id", pd.Series(dtype=object))
+    except KeyError:
+        # unexpected missing column; fallback to safe empty frame with expected columns
+        df_sorted = df_input.reindex(columns=display_cols).copy()
+        if "id" not in df_sorted.columns:
+            df_sorted.insert(0, "id", pd.Series(dtype=object))
+        df_sorted = df_sorted.reset_index(drop=True)
+
+    # View df + hidden column for inline edit trigger
+    df_view = df_sorted.copy()
+    if "id" in df_view.columns:
+        df_view["id"] = df_view["id"].astype(str)
+    df_view.insert(0, "Edit", "")
+    if "_edit_request" not in df_view.columns:
+        df_view["_edit_request"] = ""
+
+    gb = GridOptionsBuilder.from_dataframe(df_view, enableRowGroup=False, enableValue=False, enablePivot=False)
+    gb.configure_default_column(editable=False, resizable=True, filter=True, flex=1)
+
+    # Long text wrap / auto height
+    if "description" in df_view.columns:
+        gb.configure_column("description", wrapText=True, autoHeight=True)
+    if "address" in df_view.columns:
+        gb.configure_column("address", wrapText=True, autoHeight=True)
+
+    # Compute data-driven widths so hidden-tab grids get sensible widths before client-side autosize
+    def _estimate_col_width(series, min_w=100, per_char=7, base=20, max_w=420):
+        try:
+            if series is None or series.empty:
+                max_len = 0
+            else:
+                max_len = int(series.dropna().astype(str).map(len).max())
+        except Exception:
+            max_len = 0
+        w = base + per_char * max_len
+        if w < min_w:
+            return min_w
+        if w > max_w:
+            return max_w
+        return int(w)
+
+    # Prepare a sample frame for width estimation
+    try:
+        _sample = df_view[display_cols].astype(str) if not df_view.empty else pd.DataFrame({c: pd.Series(dtype=str) for c in display_cols})
+    except Exception:
+        _sample = pd.DataFrame({c: pd.Series(dtype=str) for c in display_cols})
+
+    # Apply widths (preserve a tighter fixed width for id)
+    for _c in display_cols:
+        if _c == "id":
+            gb.configure_column("id", width=110)
+            continue
+        if _c == "created_at":
+            gw = _estimate_col_width(_sample[_c] if _c in _sample else None, min_w=170)
+            gb.configure_column("created_at", minWidth=170, width=gw)
+            continue
+        if _c == "ticket_group":
+            gw = _estimate_col_width(_sample[_c] if _c in _sample else None, min_w=150)
+            gb.configure_column("ticket_group", minWidth=150, width=gw)
+            continue
+        # default estimation for other columns
+        gw = _estimate_col_width(_sample[_c] if _c in _sample else None, min_w=120)
+        gb.configure_column(_c, minWidth=120, width=gw)
+
+    _header_labels = {
+        "id": "Ticket ID",
+        "created_at": "Created At",
+        "ticket_group": "Ticket Group",
+        "ont_id": "ONT ID",
+        "type_of_call": "Type of Call",
+        "activity_inquiry_type": "Type of Activity & Inquiries",
+        "complaint_type": "Type of Complaint",
+        "employee_suggestion": "Employee Suggestion",
+        "device_location": "Device Location",
+        "root_cause": "Root Cause",
+        "ont_model": "ONT Model",
+        "complaint_status": "Complaint Status",
+        "kurdtel_service_status": "Kurdtel Service Status",
+        "osp_type": "OSP Appointment Type",
+        "city": "City",
+        "issue_type": "Issue Type",
+        "fttg": "FTTG",
+        "olt": "OLT",
+        "second_number": "Second Number",
+        "assigned_to": "Assigned To",
+        "address": "Address",
+        "description": "Description",
+        "fttx_job_status": "FTTX Job Status",
+        "fttx_job_remarks": "FTTX Job Remarks",
+        "fttx_cancel_reason": "FTTX Cancel Reason",
+        "callback_status": "Call-Back Status",
+        "callback_reason": "Call-Back Reason",
+        "followup_status": "Follow-Up Status",
+    }
+
+    for _col, _label in _header_labels.items():
+        if _col in df_view.columns:
+            gb.configure_column(_col, headerName=_label)
+
+    gb.configure_column("_edit_request", hide=True)
+
+    gb.configure_column(
+        "Edit",
+        headerName="",
+        pinned="left",
+        width=60,
+        filter=False,
+        sortable=False,
+        suppressMenu=True,
+        floatingFilter=False,
+        resizable=False,
+        cellRenderer=JsCode("""
+            class IconCellRenderer {
+                init(params){
+                    const id = params && params.data ? params.data.id : null;
+                    const span = document.createElement('span');
+                    span.className = 'edit-icon';
+                    span.textContent = '✏️';
+                    span.style.cursor = 'pointer';
+                    span.addEventListener('click', () => {
+                        try {
+                            if (params && params.node) {
+                                params.node.setDataValue('_edit_request', String(id ?? '') + '|' + String(Date.now()));
+                                params.api.dispatchEvent({ type: 'modelUpdated' });
+                            }
+                        } catch(e) {}
+                    });
+                    this.eGui = span;
+                }
+                getGui(){ return this.eGui; }
+            }
+        """),
+    )
+
+    gb.configure_grid_options(
+        onFirstDataRendered=JsCode("""
+            function(params){
+                try { params.api.sizeColumnsToFit(); } catch(e){}
+                try { setTimeout(function(){ params.api.resetRowHeights(); }, 0); } catch(e){}
+            }
+        """),
+    )
+
+    grid_options = gb.build()
+
+    grid_resp = AgGrid(
+        df_view,
+        gridOptions=grid_options,
+        key=ag_key,
+        height=520,
+        fit_columns_on_grid_load=False,
+        update_mode=GridUpdateMode.MODEL_CHANGED,
+        data_return_mode=DataReturnMode.AS_INPUT,
+        allow_unsafe_jscode=True,
+        theme="balham",
+    )
+
+    # Detect which row asked to edit and open dialog
+    try:
+        _data = grid_resp.get('data') if grid_resp else None
+        if _data is not None:
+            import pandas as _pd
+            if isinstance(_data, _pd.DataFrame):
+                rows = _data.to_dict(orient="records")
+            elif isinstance(_data, list):
+                rows = _data
+            else:
+                rows = []
+            _candidates = [r for r in rows if str(r.get('_edit_request', '')).strip() not in ('', '0', 'false', 'None')]
+            def _token_ts(flag):
+                try:
+                    s = str(flag)
+                    return float(s.split('|', 1)[1]) if '|' in s else 0.0
                 except Exception:
-                    try:
-                        if isinstance(v, list) and v:
-                            return int(str(v[0]).strip().strip("[]'\" "))
+                    return 0.0
+            req = max(_candidates, key=lambda r: _token_ts(r.get('_edit_request')), default=None)
+            if req:
+                _flag = str(req.get('_edit_request', '')).strip()
+                _rid = req.get('id')
+                def _coerce_int(v):
+                    try: return int(v)
                     except Exception:
-                        pass
-                    try:
-                        s = str(v).strip()
-                        if s.startswith('[') and s.endswith(']'):
-                            s = s.strip('[]').strip().strip("'\"")
-                        return int(float(s))
-                    except Exception:
-                        return None
-            _tid = _coerce_int(_rid)
-            if _tid is not None:
-                # open once per unique token
-                if st.session_state.get('_last_edit_token') != _flag:
-                    st.session_state['_last_edit_token'] = _flag
-                    st.session_state['_edit_open_id'] = _tid
-                    edit_ticket_dialog(_tid)
-except Exception as _e:
-    import logging as _lg
-    _lg.exception("Inline edit open failed: %s", _e)
+                        try:
+                            if isinstance(v, list) and v:
+                                return int(str(v[0]).strip().strip("[]'\" "))
+                        except Exception:
+                            pass
+                        try:
+                            s = str(v).strip()
+                            if s.startswith('[') and s.endswith(']'):
+                                s = s.strip('[]').strip().strip("'\"")
+                            return int(float(s))
+                        except Exception:
+                            return None
+                _tid = _coerce_int(_rid)
+                if _tid is not None:
+                    if st.session_state.get('_last_edit_token') != _flag:
+                        st.session_state['_last_edit_token'] = _flag
+                        st.session_state['_edit_open_id'] = _tid
+                        edit_ticket_dialog(_tid)
+    except Exception as _e:
+        import logging as _lg
+        _lg.exception("Inline edit open failed: %s", _e)
+
+
+# Render tickets view: use a controlled selector so only the active grid is created.
+assigned_name = "Dahi Nemutlu"
+# Replace the radio selector with Streamlit tabs (visually native)
+tab_my, tab_all = st.tabs(["My Tickets", "All Tickets"])
+with tab_my:
+    # Filter to tickets assigned to the current user (case-insensitive)
+    if "assigned_to" in df.columns:
+        df_my = df[df["assigned_to"].astype(str).str.lower() == assigned_name.lower()]
+    else:
+        df_my = df.iloc[0:0]
+    _render_tickets_grid(df_my, ag_key="aggrid_my")
+
+with tab_all:
+    _render_tickets_grid(df, ag_key="aggrid_all")
