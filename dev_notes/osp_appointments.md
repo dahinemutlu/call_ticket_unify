@@ -1,0 +1,3 @@
+- When the user clicks the autofill button (🔍), the app should fetch and populate `FTTG`, `City` and `Address` for the provided ONT ID. After successful autofill the ONT input should be locked to prevent accidental changes.
+- FTTG field is read-only in the create flow and will be populated automatically (autofill) from the FTTG service.
+- **Call Type** dropdown should default to `Inbound`.
