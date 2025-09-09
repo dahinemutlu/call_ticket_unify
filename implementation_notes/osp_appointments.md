@@ -1,0 +1,3 @@
+- When the user clicks the autofill button (🔍), the app should fetch and populate `FTTG`, `City` and `Address` for the provided ONT ID. After successful autofill the ONT input should be locked to prevent accidental changes.
+- The **FTTG** field is automatically populated based on the **ONT ID** lookup. After an ONT ID is entered, the system sets the field to `Yes` or `No`. By default, this field is not editable. If the same ONT ID is linked to both FTTG and non-FTTG accounts, the field becomes editable. In that case, the agent must choose the value that matches the caller’s account, and the system will display a toast notification.
+- **Call Type** dropdown should default to `Inbound`.

@@ -1,0 +1,2 @@
+- When a CPE is linked to the client, the **New Call Ticket** action appears inside the **CPE details** expander; if no CPE is linked, the action will appear below the client details list.
+- Clicking the action navigates to **Call Tickets** and opens the **Add New Ticket** form for the selected ticket type (with the **ONT ID** pre‑filled and related fields auto‑filled). Alternatively, the same form can open in a **modal dialog** on the Client (current) page (this demo uses navigation).

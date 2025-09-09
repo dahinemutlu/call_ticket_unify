@@ -23,7 +23,10 @@ def _color_missing_labels(label_texts):
 TAB_ICONS = {
     "Home": "home",
     "Digicare Tickets": "report_problem",
-    "Call Center Tickets": "phone",
+    "Call Tickets": "phone",
+    "Requests": "article",
+    "Card": "credit_score",
+    "Client": "group",
     "CPE": "router",
     "IVR": "support_agent",
     "Settings": "settings",
@@ -34,11 +37,14 @@ TAB_NAMES = list(TAB_ICONS.keys())
 
 # -------- State / routing --------
 if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "Call Center Tickets"
+    st.session_state.active_tab = "Call Tickets"
 
 # Honor query param
 if "tab" in st.query_params:
     t = st.query_params["tab"]
+    # Backward compatibility for old links
+    if t == "Call Center Tickets":
+        t = "Call Tickets"
     if t in TAB_NAMES:
         st.session_state.active_tab = t
 
@@ -49,25 +55,48 @@ with open("app_theme.css") as f:
 # -------- Top bar --------
 html = ['<div class="topbar">']
 html.append('<div class="brand">FiberCare</div>')
-html.append('<div class="tabs">')
 
+# Build tab items once for reuse in inline row and hamburger menu
+tab_items = []
 for name in TAB_NAMES:
     icon = f'<span class="material-icons">{TAB_ICONS[name]}</span>'
-    if name == "Call Center Tickets":
+    if name == "Call Tickets":
         active_cls = " call-center-active" if st.session_state.active_tab == name else ""
-        html.append(
-            f'<a href="#" class="tab{active_cls}" '
-            f'onclick="window.location.search=`?tab=Call%20Center%20Tickets`; return false;">'
-            f'{icon} {name}</a>'
+        # Use href navigation so it works without JS
+        tab_items.append(
+            f'<a href="?tab=Call%20Tickets" target="_self" class="tab{active_cls}">{icon} {name}</a>'
+        )
+    elif name == "Client":
+        active_cls = " call-center-active" if st.session_state.active_tab == name else ""
+        tab_items.append(
+            f'<a href="?tab=Client" target="_self" class="tab{active_cls}">{icon} {name}</a>'
         )
     elif name == "Exit":
-        html.append(f'<span class="tab-disabled">{icon}</span>')  # icon only
+        tab_items.append(f'<span class="tab-disabled" title="Exit">{icon}</span>')
     else:
         active_cls = " active" if st.session_state.active_tab == name else ""
-        html.append(f'<span class="tab-disabled{active_cls}">{icon} {name}</span>')
+        tab_items.append(f'<span class="tab-disabled{active_cls}">{icon} {name}</span>')
 
-html.append('</div></div>')
+# Inline tabs row
+html.append('<div class="tabs" id="topbar-tabs">')
+html.extend(tab_items)
+html.append('</div>')
+
+# Burger toggle (CSS only) and overlay drawer menu
+html.append('<input type="checkbox" id="topbar-burger-toggle" class="burger-toggle" />')
+html.append('<label for="topbar-burger-toggle" class="burger" id="topbar-burger" aria-label="Menu"><span class="material-icons">menu</span></label>')
+html.append('<div class="hamburger-overlay" id="topbar-overlay">')
+html.append('<label for="topbar-burger-toggle" class="overlay-backdrop"></label>')
+html.append('<div class="hamburger-drawer">')
+html.append('<div class="menu-header"><div class="title">Menu</div><label for="topbar-burger-toggle" class="close-btn" aria-label="Close"><span class="material-icons">close</span></label></div>')
+html.append('<div class="menu-items">')
+html.extend(tab_items)
+html.append('</div></div></div>')
+html.append('</div>')
+
 st.markdown("".join(html), unsafe_allow_html=True)
+
+# No-JS behavior handled via CSS; optional JS can be reintroduced if needed
 
 # -------- Second-level tabs (Tickets / Settings) --------
 SUBTAB_ICONS = {"Tickets": "toc", "Settings": "settings"}
@@ -83,17 +112,51 @@ if "subtab" in st.query_params:
     if q in SUBTAB_NAMES:
         st.session_state.active_subtab = q
 
-# build subtabs HTML
-base_tab_q = f"?tab={st.session_state.active_tab.replace(' ', '%20')}"
-sub_html = ['<div class="subtabs">']
-for name in SUBTAB_NAMES:
-    icon = f'<span class="material-icons">{SUBTAB_ICONS[name]}</span>'
-    cls = " sub-active" if st.session_state.active_subtab == name else ""
-    sub_html.append(
-        f'<a href="{base_tab_q}&subtab={name.replace(" ", "%20")}" target="_self" class="subtab{cls}">{icon} {name}</a>'
-    )
-sub_html.append('</div>')
-st.markdown("".join(sub_html), unsafe_allow_html=True)
+# Deep-links: open New Ticket on a specific tab and optionally prefill + autofill
+try:
+    if ("new" in st.query_params) and not st.session_state.get("_deep_link_done"):
+        _nk = str(st.query_params.get("new", "")).strip().lower()
+        _ont_q = st.query_params.get("ont")
+        _af = str(st.query_params.get("autofill", "")).strip().lower()
+
+        # Set base nav to open New Ticket area
+        st.session_state.active_tab = "Call Tickets"
+        st.session_state.active_subtab = "Tickets"
+        st.session_state.show_new_form = True
+
+        if _nk in ("complaint", "complaints"):
+            st.session_state["_new_ticket_focus"] = "Complaints"
+            if _ont_q is not None and str(_ont_q).strip():
+                st.session_state["ont_c"] = str(_ont_q).strip()
+                if _af in ("1", "true", "yes", "y"):
+                    st.session_state["_do_autofill_c"] = True
+        elif _nk in ("ai", "a&i", "activity", "activities", "inquiry", "inquiries", "activities & inquiries", "activities_and_inquiries", "activity / inquiry"):
+            st.session_state["_new_ticket_focus"] = "Activities & Inquiries"
+            if _ont_q is not None and str(_ont_q).strip():
+                st.session_state["ont_ai"] = str(_ont_q).strip()
+        elif _nk in ("osp", "appointment", "appointments", "osp appointment", "osp appointments", "osp_appointments"):
+            st.session_state["_new_ticket_focus"] = "OSP Appointments"
+            if _ont_q is not None and str(_ont_q).strip():
+                st.session_state["ont_o"] = str(_ont_q).strip()
+                if _af in ("1", "true", "yes", "y"):
+                    st.session_state["_do_autofill_o"] = True
+        st.session_state["_deep_link_done"] = True
+        st.rerun()
+except Exception:
+    pass
+
+# build subtabs HTML only for Call Tickets
+if st.session_state.active_tab == "Call Tickets":
+    base_tab_q = f"?tab={st.session_state.active_tab.replace(' ', '%20')}"
+    sub_html = ['<div class="subtabs">']
+    for name in SUBTAB_NAMES:
+        icon = f'<span class="material-icons">{SUBTAB_ICONS[name]}</span>'
+        cls = " sub-active" if st.session_state.active_subtab == name else ""
+        sub_html.append(
+            f'<a href="{base_tab_q}&subtab={name.replace(" ", "%20")}" target="_self" class="subtab{cls}">{icon} {name}</a>'
+        )
+    sub_html.append('</div>')
+    st.markdown("".join(sub_html), unsafe_allow_html=True)
 
 # ====================== UTILITIES ======================
 
@@ -135,9 +198,9 @@ def load_dim_options(filename: str, default=None, col_index: int = 1) -> list[st
     return (default or [])
 
 
-def load_dev_note(fname: str) -> str:
-    """Load a markdown developer note from ./dev_notes or repo root if present."""
-    candidates = [Path("dev_notes") / fname, Path(fname)]
+def load_implementation_note(fname: str) -> str:
+    """Load a markdown implementation note from ./implementation_notes or repo root if present."""
+    candidates = [Path("implementation_notes") / fname, Path(fname)]
     for p in candidates:
         try:
             if p.exists():
@@ -149,7 +212,15 @@ def load_dev_note(fname: str) -> str:
 def init_ticket_store():
     if "tickets_df" not in st.session_state:
         st.session_state.tickets_df = pd.DataFrame(columns=[
-            "id", "created_at", "ticket_group", "ont_id", "type_of_call", "description", "activity_inquiry_type", "digicare_issue_type", "complaint_type", "employee_suggestion", "device_location", "root_cause", "ont_model", "complaint_status", "kurdtel_service_status", "osp_type", "city", "issue_type", "fttg", "olt", "second_number", "assigned_to", "address", "outage_start_date", "outage_end_date", "fttx_job_status", "fttx_job_remarks", "fttx_cancel_reason", "callback_status", "callback_reason", "followup_status"])
+            "id", "created_at", "ticket_group", "ont_id", "type_of_call", "description",
+            "activity_inquiry_type", "digicare_issue_type",
+            "complaint_type", "refund_type", "online_game", "employee_suggestion", "device_location", "root_cause", "ont_model", "complaint_status", "kurdtel_service_status",
+            "osp_type", "city", "issue_type", "fttg", "olt", "second_number", "assigned_to", "address",
+            "outage_start_date", "outage_end_date",
+            "fttx_job_status", "fttx_job_remarks", "fttx_cancel_reason",
+            "callback_status", "callback_reason", "followup_status",
+            "reminder_at"
+        ])
     if "ticket_seq" not in st.session_state:
         st.session_state.ticket_seq = 1
 
@@ -177,8 +248,9 @@ FTTX_JOB_STATUS        = load_dim_options("cx_dim_fttx_job_status.xlsx", ["In Pr
 CALLBACK_STATUS        = load_dim_options("cx_dim_callback_status.xlsx", [])
 CALLBACK_REASON        = load_dim_options("cx_dim_callback_reason.xlsx", [])
 FOLLOWUP_STATUS        = load_dim_options("cx_dim_followup_status.xlsx", [])
-# iQ Digicare specific issue types
 DIGICARE_ISSUES        = load_dim_options("cx_dim_digicare_issue.xlsx", [])
+ONLINE_GAMES          = load_dim_options("cx_dim_online_game.xlsx", [])
+REFUND_TYPES           = load_dim_options("cx_dim_refund_type.xlsx", ["Refund Info", "Refund Request"])
 
 # OSP types (removed "Sub-Districts Interface")
 OSP_TYPES = [
@@ -209,6 +281,83 @@ def _update_row(i, patch: dict):
             df.at[i, k] = v
     st.session_state.tickets_df = df
 
+# ---- New Ticket helpers ----
+def _reset_new_ticket_fields():
+    """Clear new-ticket form fields and show the new ticket form."""
+    st.session_state.show_new_form = True
+    for _k in [
+        # Activities & Inquiries
+        'ont_ai','ont_ai_locked','ai_pending_clear','autofill_message_ai','autofill_level_ai',
+        'sb_type_of_activity_inquiries_1','sb_digicare_issue_1',
+        # Complaints
+        'ont_c','olt_c','olt_c_filled','ont_c_locked','c_pending_clear','autofill_message_c','autofill_level_c',
+        'sb_type_of_complaint_1','sb_refund_type_1','sb_complaint_status_1','sb_employee_suggestion_1','sb_root_cause_1','ont_model','sb_device_location_1',
+    'assigned_to_c','kurdtel_status_c','online_game_c','online_game_other_c','outage_start_c','outage_end_c',
+    'reminder_date_c','reminder_time_c',
+        # OSP
+        'ont_o','ont_o_locked','osp_pending_clear','autofill_message_o','autofill_level_o','city_o','fttg_o','address_o',
+        'sb_osp_appointment_type_1','second_number_o','assigned_to_o',
+    ]:
+        try:
+            st.session_state[_k] = ''
+        except Exception:
+            pass
+    # Ensure date/time widgets start unset to avoid type mismatches
+    for _k in ('reminder_date_c','reminder_time_c'):
+        try:
+            st.session_state.pop(_k, None)
+        except Exception:
+            pass
+    # Ensure Call Type defaults to the first option (e.g., 'Inbound') on fresh form
+    try:
+        if CALL_TYPES:
+            st.session_state['sb_type_of_call_1'] = CALL_TYPES[0]
+            st.session_state['sb_type_of_call_2'] = CALL_TYPES[0]
+            st.session_state['sb_type_of_call_3'] = CALL_TYPES[0]
+        else:
+            for _k in ['sb_type_of_call_1','sb_type_of_call_2','sb_type_of_call_3']:
+                st.session_state.pop(_k, None)
+    except Exception:
+        pass
+
+def _is_new_form_dirty() -> bool:
+    """Return True if any known new-ticket fields have values indicating in-progress input."""
+    candidates = [
+        # AI
+        'ont_ai','sb_type_of_activity_inquiries_1','sb_digicare_issue_1','sb_type_of_call_1',
+        # Complaints
+    'ont_c','sb_type_of_complaint_1','sb_refund_type_1','sb_complaint_status_1','sb_type_of_call_2','sb_employee_suggestion_1','sb_root_cause_1','ont_model','sb_device_location_1',
+    'assigned_to_c','olt_c','kurdtel_status_c','online_game_c','online_game_other_c','outage_start_c','outage_end_c','ip_c','vlan_c','packet_loss_c','high_ping_c',
+    'reminder_date_c','reminder_time_c',
+        # OSP
+        'ont_o','sb_osp_appointment_type_1','sb_type_of_call_3','second_number_o','assigned_to_o','fttg_o','city_o','address_o',
+    ]
+    for k in candidates:
+        v = st.session_state.get(k)
+        # Treat default Call Type (first option) as not-dirty
+        if k in ('sb_type_of_call_1','sb_type_of_call_2','sb_type_of_call_3') and CALL_TYPES:
+            if v in (None, '', [], {}, 0, CALL_TYPES[0]):
+                continue
+        if v not in (None, '', [], {}, 0):
+            return True
+    return False
+
+@st.dialog("Start a new ticket?")
+def _confirm_new_ticket_dialog():
+    st.markdown('<div class="confirm-new-ticket">', unsafe_allow_html=True)
+    st.write("You have unsaved changes. Starting a new ticket will discard them. Continue?")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Start new ticket", key="confirm_start_new_ticket", use_container_width=True):
+            _reset_new_ticket_fields()
+            st.session_state['_confirm_new_ticket'] = False
+            st.rerun()
+    with c2:
+        if st.button("Cancel", key="cancel_start_new_ticket", use_container_width=True):
+            st.session_state['_confirm_new_ticket'] = False
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
 @st.dialog("View / Edit Ticket")
 def edit_ticket_dialog(ticket_id: int):
     i, row = _get_row_by_id(ticket_id)
@@ -237,6 +386,13 @@ def edit_ticket_dialog(ticket_id: int):
             })
         elif g == "Complaints":
             comp = st.selectbox("Complaint Type", COMPLAINT_TYPES, index=(COMPLAINT_TYPES.index(row["complaint_type"]) if row.get("complaint_type") in COMPLAINT_TYPES else None), placeholder="")
+            refund_t = ""
+            if comp == "Refund":
+                refund_t = st.selectbox(
+                    "Refund Type", REFUND_TYPES,
+                    index=(REFUND_TYPES.index(row.get("refund_type")) if row.get("refund_type") in REFUND_TYPES else None),
+                    placeholder=""
+                ) or ""
             emp = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=(EMP_SUGGESTION.index(row["employee_suggestion"]) if row.get("employee_suggestion") in EMP_SUGGESTION else None), placeholder="")
             status = st.selectbox("Complaint Status", COMP_STATUS, index=(COMP_STATUS.index(row["complaint_status"]) if row.get("complaint_status") in COMP_STATUS else None), placeholder="")
             root = st.selectbox("Root Cause", ROOT_CAUSE, index=(ROOT_CAUSE.index(row["root_cause"]) if row.get("root_cause") in ROOT_CAUSE else None), placeholder="")
@@ -245,11 +401,11 @@ def edit_ticket_dialog(ticket_id: int):
             olt = st.text_input("OLT", value=str(row.get("olt") or ""))
             second = st.text_input("Second Number", value=str(row.get("second_number") or ""))
             desc = st.text_area("Description", value=str(row.get("description") or ""), height=120)
-            # Outage dates (for Refund complaints)
+            # Outage dates (for Refund complaints with Refund Type = Refund Request)
             outage_start_e = None
             outage_end_e = None
             try:
-                if comp == "Refund":
+                if (comp == "Refund") and (refund_t == "Refund Request"):
                     try:
                         _s = row.get("outage_start_date")
                         outage_start_e = pd.to_datetime(_s).date() if _s else datetime.now().date()
@@ -268,6 +424,9 @@ def edit_ticket_dialog(ticket_id: int):
             kurdtel = ""
             if row.get("complaint_type") == "Kurdtel":
                 kurdtel = st.selectbox("Kurdtel Service Status", KURDTEL_SERVICE_STATUS, index=(KURDTEL_SERVICE_STATUS.index(row["kurdtel_service_status"]) if row.get("kurdtel_service_status") in KURDTEL_SERVICE_STATUS else None), placeholder="")
+            online_game_e = ""
+            if row.get("complaint_type") == "Online Game Issue":
+                online_game_e = st.selectbox("Online Game", ONLINE_GAMES, index=(ONLINE_GAMES.index(row.get("online_game")) if row.get("online_game") in ONLINE_GAMES else None), placeholder="")
             # Callback / Follow-up fields
             cb_status = st.selectbox(
                 "Call-Back Status", CALLBACK_STATUS,
@@ -286,6 +445,7 @@ def edit_ticket_dialog(ticket_id: int):
             )
             updates.update({
                 "complaint_type": comp,
+                "refund_type": refund_t if comp == "Refund" else "",
                 "employee_suggestion": emp,
                 "complaint_status": status,
                 "root_cause": root,
@@ -297,6 +457,7 @@ def edit_ticket_dialog(ticket_id: int):
                 "outage_start_date": (outage_start_e.isoformat() if hasattr(outage_start_e, 'isoformat') else (str(outage_start_e) if outage_start_e else "")),
                 "outage_end_date": (outage_end_e.isoformat() if hasattr(outage_end_e, 'isoformat') else (str(outage_end_e) if outage_end_e else "")),
                 "kurdtel_service_status": kurdtel if row.get("complaint_type") == "Kurdtel" else "",
+                "online_game": online_game_e if row.get("complaint_type") == "Online Game Issue" else "",
                 "callback_status": cb_status,
                 "callback_reason": cb_reason,
                 "followup_status": fu_status,
@@ -348,19 +509,21 @@ def edit_ticket_dialog(ticket_id: int):
             st.rerun()
 
 # ====================== PAGE CONTENT ======================
-# If user chose Settings subtab, show settings UI
-if st.session_state.active_subtab == "Settings":
-    st.markdown("### Manage dropdowns")
+# If user chose Settings subtab (only within Call Center Tickets), show settings UI
+if st.session_state.active_tab == "Call Tickets" and st.session_state.active_subtab == "Settings":
+    st.markdown("### Manage Lookups")
     # description removed per request
 
     DROPDOWN_CONFIGS = [
         ("Employee Suggestion", "EMP_SUGGESTION"),
         ("Device Location", "DEVICE_LOC"),
         ("Root Cause", "ROOT_CAUSE"),
-        ("ONT Models", "ONT_MODELS"),
+        ("ONT Model", "ONT_MODELS"),
         ("Complaint Status", "COMP_STATUS"),
-        ("City Options", "CITY_OPTIONS"),
-        ("Issue Types", "ISSUE_TYPES"),
+        ("Refund Type", "REFUND_TYPES"),
+        ("Online Game", "ONLINE_GAMES"),
+        ("City", "CITY_OPTIONS"),
+        ("Issue Type", "ISSUE_TYPES"),
         ("Kurdtel Service Status", "KURDTEL_SERVICE_STATUS"),
         ("Assigned To", "ASSIGNED_TO"),
         ("FTTX Job Status", "FTTX_JOB_STATUS"),
@@ -487,63 +650,266 @@ if st.session_state.active_subtab == "Settings":
     # prevent the rest of the page (Tickets UI / grid) from rendering when on Settings
     st.stop()
 # original main content
-if st.session_state.active_tab != "Call Center Tickets":
+if st.session_state.active_tab == "Client":
+    # Client page layout: two columns
+    st.markdown('<div id="client-layout">', unsafe_allow_html=True)
+    left, right = st.columns([2, 5], gap=None)
+    with left:
+        # Native Streamlit version of the client card (no custom HTML)
+        st.subheader("Dahi Nemutlu")
+
+        client_rows = [
+            ("ID", "22000"),
+            ("Client Type", "Employee"),
+            ("Account Number", "07700000000"),
+            ("Service ID", "91000000"),
+            ("Sip", "This Client has no Sip."),
+            ("City", ""),
+            ("Address", ""),
+            ("Comment", ""),
+            ("Created At", ""),
+            ("Last Change", ""),
+        ]
+
+        # Use compact key/value rows so the column's intrinsic width stays small
+        for idx, (lbl, val) in enumerate(client_rows):
+            lcol, vcol = st.columns([1, 2], gap="small")
+            with lcol:
+                st.caption(lbl)
+            with vcol:
+                st.write(val or "—")
+            # Compact separator between rows (skip after the last row)
+            if idx < len(client_rows) - 1:
+                st.markdown('<hr style="margin:0;border:0;border-top:1px solid rgba(0,0,0,0.10);" />', unsafe_allow_html=True)
+    with right:
+    # Replace Streamlit tabs with HTML subtabs similar to "Call Tickets"
+        CLIENT_SUBTAB_ICONS = {
+            "CPEs": "router",
+            "Assign": "assignment_turned_in",
+            "SIP": "dialer_sip",
+            "Client Operations": "assignment",
+            "Client Attachments": "attachment",
+            "Client Attachments KYC": "fingerprint",
+            "Dicigare Tickets": "report_problem",
+            "Call Tickets": "phone",
+        }
+        CLIENT_SUBTAB_NAMES = list(CLIENT_SUBTAB_ICONS.keys())
+
+        # initialize active client subtab
+        if "active_client_subtab" not in st.session_state:
+            st.session_state.active_client_subtab = "CPEs"
+        # allow switch via query param only when on Client tab
+        if st.session_state.active_tab == "Client" and "client_subtab" in st.query_params:
+            cq = st.query_params["client_subtab"]
+            if cq in CLIENT_SUBTAB_NAMES:
+                st.session_state.active_client_subtab = cq
+
+        base_q = "?tab=Client"
+        sub_html = ['<div class="subtabs" style="margin-left:12px;">']
+        for i, name in enumerate(CLIENT_SUBTAB_NAMES):
+            icon = f'<span class="material-icons">{CLIENT_SUBTAB_ICONS[name]}</span>'
+            cls = " sub-active" if st.session_state.active_client_subtab == name else ""
+            if i == 0:
+                # Only the first subtab is clickable
+                sub_html.append(
+                    f'<a href="{base_q}&client_subtab={name.replace(" ", "%20")}" target="_self" class="subtab{cls}">{icon} {name}</a>'
+                )
+            else:
+                # Render others as disabled/non-clickable
+                sub_html.append(
+                    f'<span class="subtab subtab-disabled{cls}" title="Disabled">{icon} {name}</span>'
+                )
+        sub_html.append('</div>')
+        st.markdown("".join(sub_html), unsafe_allow_html=True)
+
+        # Right column content based on active client subtab
+        current = st.session_state.active_client_subtab
+        if current == "CPEs":
+            st.markdown(
+                """
+                <div class="exp-card">
+                  <details open>
+                    <summary>#62000 - ccbe.5991.0000 - 1400 - Employee-1 - <span class="dt-green">2026-12-31 23:59:50</span></summary>
+                    <div class="cpe-actions">
+                      <div class="dropdown" style="position:relative;display:inline-block;">
+                        <input type="checkbox" id="nt-dropdown-toggle" class="nt-dropdown-toggle" />
+                        <label for="nt-dropdown-toggle" class="cpe-btn cpe-dropdown-btn" aria-haspopup="true"
+                          aria-expanded="false"><span class="material-icons">add_ic_call</span> New Call Ticket <span
+                            class="material-icons caret">expand_more</span></label>
+                        <div class="dropdown-menu"
+                          style="position:absolute;top:100%;left:0;background:#fff;border:1px solid #E5E7EB;border-radius:.5rem;box-shadow:0 4px 16px rgba(0,0,0,0.1);min-width:220px;padding:.25rem 0;z-index:10;">
+                          <a class="dropdown-item" style="display:block;padding:.5rem .75rem;color:#023058;text-decoration:none;"
+                            href="?tab=Call%20Tickets&subtab=Tickets&new=activity&ont=1400" target="_self">Activity / Inquiry</a>
+                          <a class="dropdown-item" style="display:block;padding:.5rem .75rem;color:#023058;text-decoration:none;"
+                            href="?tab=Call%20Tickets&subtab=Tickets&new=complaint&ont=1400&autofill=1" target="_self">Complaint</a>
+                          <a class="dropdown-item" style="display:block;padding:.5rem .75rem;color:#023058;text-decoration:none;"
+                            href="?tab=Call%20Tickets&subtab=Tickets&new=osp%20appointment&ont=1400&autofill=1" target="_self">OSP
+                            Appointment</a>
+                        </div>
+                        <label for="nt-dropdown-toggle" class="cpe-dd-overlay" aria-hidden="true"></label>
+                      </div>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">settings_remote</span> Remote
+                        Access</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">restart_alt</span> Restart
+                        Session</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">remove_circle</span>
+                        Unblock</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">description</span>
+                        Request</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">public</span> Public
+                        Ip</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">credit_card</span>
+                        Recharge</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">undo</span> Undo
+                        Recharge</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">near_me</span>
+                        Transfer</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">find_replace</span>
+                        Replace</span>
+                      <span class="cpe-btn cpe-btn-disabled" title="Disabled"><span class="material-icons">highlight_off</span>
+                        Un-Assign</span>
+                    </div>
+                    <div class="exp-content">
+                      <div class="kv-cols">
+                        <div class="kv-list">
+                          <div class="kv-row">
+                            <div class="kv-label">ID</div>
+                            <div class="kv-value">62756</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">Phone</div>
+                            <div class="kv-value">07700000000</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">ONT Model</div>
+                            <div class="kv-value">844G</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">Package</div>
+                            <div class="kv-value">Employee-1</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">Expiration</div>
+                            <div class="kv-value">2026-12-31 23:59:50</div>
+                          </div>
+                        </div>
+                        <div class="kv-list">
+                          <div class="kv-row">
+                            <div class="kv-label">OLT</div>
+                            <div class="kv-value">NTWK-Sul-Pasha-OLT-00</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">ONT ID</div>
+                            <div class="kv-value">1400</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">Serial</div>
+                            <div class="kv-value">CXNK00000000</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">MAC</div>
+                            <div class="kv-value">ccbe.5991.0000</div>
+                          </div>
+                        </div>
+                        <div class="kv-list">
+                          <div class="kv-row">
+                            <div class="kv-label">Operational Status</div>
+                            <div class="kv-value">enable</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">Status</div>
+                            <div class="kv-value">Online</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">IP</div>
+                            <div class="kv-value">10.49.72.000</div>
+                          </div>
+                          <div class="kv-sep"></div>
+                          <div class="kv-row">
+                            <div class="kv-label">VLAN</div>
+                            <div class="kv-value">3021</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            # Developer notes: render client markdown below the CPE card inside an expander
+            # Add a bit of top spacing and indent using columns so it doesn't stick to the left/top
+            try:
+                _dev_md_client = load_implementation_note("client.md")
+                if _dev_md_client:
+                    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+                    pad_l, content, pad_r = st.columns([1, 100, 10])
+                    with content:
+                        with st.expander("Implementation notes (Client)", expanded=False):
+                            st.markdown('<div class="implementation-notes-tag"></div>', unsafe_allow_html=True)
+                            st.markdown(_dev_md_client)
+            except Exception:
+                pass
+        elif current == "Assign":
+            st.write("")
+        elif current == "SIP":
+            st.write("")
+        elif current == "Client Operations":
+            st.write("")
+        elif current == "Client Attachments":
+            st.write("")
+        elif current == "Client Attachments KYC":
+            st.write("")
+        elif current == "Dicigare Tickets":
+            st.write("")
+        elif current == "Call Tickets":
+            st.write("")
+    st.markdown('</div>', unsafe_allow_html=True)
+elif st.session_state.active_tab != "Call Tickets":
     st.write("Content for this tab will go here…")
-elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.active_subtab == "Tickets":
-    # Header row: only New Ticket button (left-aligned in a 3-col grid)
-    with st.container():
-        c1, c2, c3 = st.columns(3, gap="large")
-        with c1:
-            # Wrap the button so CSS can target it without :has or text matching
-            st.markdown('<div id="new-ticket-btn">', unsafe_allow_html=True)
-            new_clicked = st.button("✚ New Ticket", use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        # c2 and c3 left empty intentionally
+elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_subtab == "Tickets":
+    # Header row: only New Ticket button (single block to avoid extra vertical spacing on mobile)
+    # Wrap the button so CSS can target it without :has or text matching
+    st.markdown('<div id="new-ticket-btn">', unsafe_allow_html=True)
+    new_clicked = st.button("New Call Ticket", key="new_ticket_btn", use_container_width=False)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # New Ticket form
     if new_clicked:
-        st.session_state.show_new_form = True
-        # reset fields + flags for autofill toggle/lock
-        for _k in ['ont_ai','ont_c','olt_c',
-                   'olt_c_filled',
-                   'ont_ai_locked','ont_c_locked','ai_pending_clear','c_pending_clear',
-                   'autofill_message_ai','autofill_level_ai','autofill_message_c','autofill_level_c',
-                   # OSP fields
-                   'ont_o','ont_o_locked','osp_pending_clear','autofill_message_o','autofill_level_o','city_o','fttg_o',
-                   # Kurdtel status field
-                   'kurdtel_status_c']:
-            st.session_state[_k] = ''
+        if _is_new_form_dirty():
+            st.session_state['_confirm_new_ticket'] = True
+            _confirm_new_ticket_dialog()
+        else:
+            _reset_new_ticket_fields()
 
     if st.session_state.get("show_new_form", False):
-        st.markdown("### Add New Ticket")
-        # Fixed placeholder to prevent layout shift + persistent banner from session
-        msg_top = st.empty()
-        # initialize message keys if missing
+        st.markdown('<h3 class="add-new-ticket-h">Add New Ticket</h3>', unsafe_allow_html=True)
+    # initialize message keys if missing
         for _k in ['autofill_message_ai','autofill_level_ai','autofill_message_c','autofill_level_c','autofill_message_o','autofill_level_o']:
             if _k not in st.session_state:
                 st.session_state[_k] = ''
-        if any([st.session_state.get('autofill_message_ai'),
-                st.session_state.get('autofill_message_c'),
-                st.session_state.get('autofill_message_o')]):
-            # prefer the latest non-empty (Complaints > AI > OSP by precedence)
-            msg = (st.session_state.get('autofill_message_c') or
-                   st.session_state.get('autofill_message_ai') or
-                   st.session_state.get('autofill_message_o'))
-            lvl = (st.session_state.get('autofill_level_c') or
-                   st.session_state.get('autofill_level_ai') or
-                   st.session_state.get('autofill_level_o'))
-            if lvl == 'warning':
-                msg_top.warning(msg)
-            else:
-                msg_top.info(msg)
-        else:
-            msg_top.markdown("<div style='min-height:48px'></div>", unsafe_allow_html=True)
 
-        # Create tabs (always define before use)
-        tabs = st.tabs(["Activities & Inquiries", "Complaints", "OSP Appointments"])
+        # Create tabs (always define before use); allow preselecting Complaints via deep link
+        _tabs_order = ["Activities & Inquiries", "Complaints", "OSP Appointments"]
+        _focus = st.session_state.get("_new_ticket_focus")
+        if _focus in _tabs_order:
+            # rotate so focus tab is first
+            i = _tabs_order.index(_focus)
+            _tabs_order = _tabs_order[i:] + _tabs_order[:i]
+        tabs = st.tabs(_tabs_order)
+        tabs_by_label = {label: tabs[i] for i, label in enumerate(_tabs_order)}
 
         # ---- Activities & Inquiries ----
-        with tabs[0]:
+        with tabs_by_label["Activities & Inquiries"]:
             a0c1, a0c2, a0c3 = st.columns(3)
             with a0c1:
                 st.selectbox("Activity / Inquiry Type", ACTIVITY_TYPES, index=None, placeholder="", key="sb_type_of_activity_inquiries_1")
@@ -551,6 +917,11 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
             with a0c3: st.empty()
 
             with st.form("form_ai", clear_on_submit=False):
+                # Show AI toast just above first row (ONT ID)
+                _msg = st.session_state.get('autofill_message_ai')
+                _lvl = st.session_state.get('autofill_level_ai')
+                if _msg:
+                    (st.warning if _lvl == 'warning' else st.info)(_msg)
                 if st.session_state.get("ai_pending_clear"):
                     st.session_state["ont_ai"] = ""
                     st.session_state["ont_ai_locked"] = ""
@@ -562,7 +933,8 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                 with ac2:
                     call_type = st.selectbox("Call Type", CALL_TYPES, index=(0 if CALL_TYPES else None), placeholder="", key="sb_type_of_call_1")
                 with ac3:
-                    assigned_to_ai = st.selectbox("Assigned To", ASSIGNED_TO, index=None, placeholder="", key="assigned_to_ai")
+                    # Assigned To is hidden during creation; auto-assign to current user on save
+                    st.empty()
 
                 # Row 2: conditional iQ Digicare Issue Type
                 b1, b2, b3 = st.columns(3)
@@ -576,13 +948,18 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                 with b3:
                     st.empty()
 
-                # description moves to row 3
-                description = st.text_area("Description", height=100, placeholder="Enter details…")
+                # Description is only needed for certain activity types
+                show_desc = (activity_choice in ("Faulty Device & Adapter", "Information"))
+                if show_desc:
+                    description = st.text_area("Description", height=100, placeholder="Enter details…")
+                else:
+                    description = ""
 
                 save_ai = st.form_submit_button("Save Activities & Inquiries")
                 if save_ai:
                     activity_type_val = st.session_state.get("sb_type_of_activity_inquiries_1")
-                    assigned_ai = st.session_state.get("assigned_to_ai") or (ASSIGNED_TO[0] if ASSIGNED_TO else "")
+                    # Auto-assign to current user (hidden during creation)
+                    assigned_ai = "Dahi Nemutlu"
                     missing = []
                     if not st.session_state.get("ont_ai", "").strip():
                         missing.append("ONT ID")
@@ -590,7 +967,8 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                         missing.append("Activity / Inquiry Type")
                     if not call_type:
                         missing.append("Call Type")
-                    if not description.strip():
+                    # Require Description only for specific activity types
+                    if (activity_type_val in ("Faulty Device & Adapter", "Information")) and (not str(description).strip()):
                         missing.append("Description")
                     if missing:
                         _color_missing_labels(missing)
@@ -611,22 +989,53 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
 
             # Developer notes: render activities & inquiries markdown below the form inside an expander
             try:
-                _dev_md = load_dev_note("activities_inquiries.md")
+                _dev_md = load_implementation_note("activities_inquiries.md")
                 if _dev_md:
-                    with st.expander("Developer notes (Activities & Inquiries)", expanded=False):
+                    with st.expander("Implementation notes (Activities & Inquiries)", expanded=False):
+                        st.markdown('<div class="implementation-notes-tag"></div>', unsafe_allow_html=True)
                         st.markdown(_dev_md)
             except Exception:
                 pass
 
         # ---- Complaints ----
-        with tabs[1]:
+        with tabs_by_label["Complaints"]:
             r0c1, r0c2, r0c3 = st.columns(3)
             with r0c1:
                 st.selectbox("Complaint Type", COMPLAINT_TYPES, index=None, placeholder="", key="sb_type_of_complaint_1")
-            with r0c2: st.empty()
-            with r0c3: st.empty()
+            with r0c2:
+                # Refund Type appears only when Complaint Type is Refund
+                if st.session_state.get("sb_type_of_complaint_1") == "Refund":
+                    st.selectbox("Refund Type", REFUND_TYPES, index=None, placeholder="", key="sb_refund_type_1")
+                else:
+                    st.session_state["sb_refund_type_1"] = ""
+                    st.empty()
+            with r0c3:
+                st.empty()
+
+            # Clear outage dates unless Refund Type is explicitly 'Refund Request'
+            _ct_norm = str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower()
+            _rt_norm = str(st.session_state.get("sb_refund_type_1") or "").strip().lower()
+            if not (_ct_norm == "refund" and _rt_norm == "refund request"):
+                # Remove invalid defaults so date_input can render cleanly when shown
+                st.session_state.pop("outage_start_c", None)
+                st.session_state.pop("outage_end_c", None)
+
+            # Place Complaint Status on a new row below (first column), still outside the form to allow reruns on change
+            s0c1, s0c2, s0c3 = st.columns(3)
+            with s0c1:
+                st.selectbox("Complaint Status", COMP_STATUS, index=None, placeholder="", key="sb_complaint_status_1")
+            with s0c2:
+                st.empty()
+            with s0c3:
+                st.empty()
+            
 
             with st.form("form_complaint", clear_on_submit=False):
+                # Show Complaints toast just above first row (ONT ID)
+                _msg = st.session_state.get('autofill_message_c')
+                _lvl = st.session_state.get('autofill_level_c')
+                if _msg:
+                    (st.warning if _lvl == 'warning' else st.info)(_msg)
                 if st.session_state.get("c_pending_clear"):
                     st.session_state["ont_c"] = ""
                     st.session_state["olt_c"] = ""
@@ -634,6 +1043,10 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                     st.session_state["ont_c_locked"] = ""
                     st.session_state["ont_model"] = ""
                     st.session_state["kurdtel_status_c"] = ""
+                    st.session_state["ip_c"] = ""
+                    st.session_state["vlan_c"] = ""
+                    st.session_state["packet_loss_c"] = ""
+                    st.session_state["high_ping_c"] = ""
                     st.session_state["c_pending_clear"] = False
 
                 r1c1, r1c2, r1c3 = st.columns(3)
@@ -648,14 +1061,56 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                             c_autofill = st.form_submit_button("🔍︎", help="Fetch and autofill related details", use_container_width=True)
                         else:
                             c_remove = st.form_submit_button("❌︎", use_container_width=True)
+                # Handle deferred deep-link autofill once
+                if st.session_state.pop("_do_autofill_c", False):
+                    if st.session_state.get("ont_c", "").strip():
+                        st.session_state["olt_c"] = "NTWK-Sul-Pasha-OLT-00"
+                        try:
+                            # Prefer an option starting with "844"; fallback to 3rd option, else 1st
+                            _ont_target = next((m for m in (ONT_MODELS or []) if str(m).strip().startswith("844")), None)
+                            if _ont_target is None and len(ONT_MODELS or []) >= 3:
+                                _ont_target = ONT_MODELS[2]
+                            if _ont_target is None:
+                                _ont_target = ONT_MODELS[0] if ONT_MODELS else ""
+                            st.session_state["ont_model"] = _ont_target
+                        except Exception:
+                            st.session_state["ont_model"] = st.session_state.get("ont_model", "")
+                        # Autofill Kurdtel Service Status on deep-link when relevant
+                        try:
+                            if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
+                                st.session_state["kurdtel_status_c"] = KURDTEL_SERVICE_STATUS[0] if KURDTEL_SERVICE_STATUS else ""
+                        except Exception:
+                            st.session_state["kurdtel_status_c"] = st.session_state.get("kurdtel_status_c", "")
+                        # Autofill IP/VLAN on deep-link autofill
+                        st.session_state["ip_c"] = "10.49.72.000"
+                        st.session_state["vlan_c"] = "3021"
+                        st.session_state["olt_c_filled"] = True
+                        st.session_state["ont_c_locked"] = True
+                        st.session_state["autofill_message_c"] = "Fields autofilled."
+                        st.session_state["autofill_level_c"] = "info"
+                        st.rerun()
+                # Row 1: c2 = Call Type, c3 = Employee Suggestion
+                with r1c2:
+                    type_of_call_c = st.selectbox("Call Type", CALL_TYPES, index=(0 if CALL_TYPES else None), placeholder="", key="sb_type_of_call_2")
+                with r1c3:
+                    employee_suggestion = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=None, placeholder="", key="sb_employee_suggestion_1")
                 if not locked_c:
                     if "c_autofill" in locals() and c_autofill:
                         if st.session_state.get("ont_c", "").strip():
-                            st.session_state["olt_c"] = "xxxx-xxx-xxx-xxx-xx"
+                            st.session_state["olt_c"] = "NTWK-Sul-Pasha-OLT-00"
                             try:
-                                st.session_state["ont_model"] = ONT_MODELS[0] if ONT_MODELS else ""
+                                # Prefer an option starting with "844"; fallback to 3rd option, else 1st
+                                _ont_target = next((m for m in (ONT_MODELS or []) if str(m).strip().startswith("844")), None)
+                                if _ont_target is None and len(ONT_MODELS or []) >= 3:
+                                    _ont_target = ONT_MODELS[2]
+                                if _ont_target is None:
+                                    _ont_target = ONT_MODELS[0] if ONT_MODELS else ""
+                                st.session_state["ont_model"] = _ont_target
                             except Exception:
                                 st.session_state["ont_model"] = ""
+                            # Autofill IP/VLAN on manual autofill
+                            st.session_state["ip_c"] = "10.49.72.000"
+                            st.session_state["vlan_c"] = "3021"
                             st.session_state["olt_c_filled"] = True
                             st.session_state["ont_c_locked"] = True
                             try:
@@ -677,10 +1132,8 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                         st.session_state["autofill_level_c"] = "info"
                         st.rerun()
 
-                with r1c2:
-                    employee_suggestion = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=None, placeholder="", key="sb_employee_suggestion_1")
-                with r1c3:
-                    complaint_status = st.selectbox("Complaint Status", COMP_STATUS, index=None, placeholder="", key="sb_complaint_status_1")
+                # Complaint Status is controlled above the form
+                # (r0c2 outside the form)
 
                 r2c1, r2c2, r2c3 = st.columns(3)
                 with r2c1:
@@ -688,63 +1141,147 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                 with r2c2:
                     ont_model = st.selectbox("ONT Model", ONT_MODELS, index=None, placeholder="Click 🔍︎ to auto fill", key="ont_model")
                 with r2c3:
-                    device_location = st.selectbox("Device Location", DEVICE_LOC, index=None, placeholder="", key="sb_device_location_1")
-
-                r3c1, r3c2, r3c3 = st.columns(3)
-                with r3c1:
-                    type_of_call_c = st.selectbox("Call Type", CALL_TYPES, index=(0 if CALL_TYPES else None), placeholder="", key="sb_type_of_call_2")
-                with r3c2:
-                    olt_c_val = st.text_input("OLT", key="olt_c", placeholder="Click 🔍︎ to auto fill")
-                with r3c3:
-                    second_number = st.text_input("Second Number")
-
-                # Row 4: Assigned To | Outage Start Date | Outage End Date
-                # initialize outage variables so they're in scope for save handler
-                outage_start = None
-                outage_end = None
-                r4c1, r4c2, r4c3 = st.columns(3)
-                with r4c1:
-                    assigned_to_c = st.selectbox("Assigned To", ASSIGNED_TO, index=None, placeholder="", key="assigned_to_c")
-                with r4c2:
-                    # Show Kurdtel status for Kurdtel complaints, otherwise show Outage Start for Refund
                     if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
+                        # Show Kurdtel Service Status here (read-only) instead of row 5
                         st.selectbox(
                             "Kurdtel Service Status",
                             KURDTEL_SERVICE_STATUS, index=None, placeholder="",
                             key="kurdtel_status_c", disabled=True
                         )
-                    elif st.session_state.get("sb_type_of_complaint_1") == "Refund":
-                        try:
-                            outage_start = st.date_input("Outage Start Date", key="outage_start_c")
-                        except Exception:
-                            outage_start = None
                     else:
-                        st.empty()
+                        device_location = st.selectbox("Device Location", DEVICE_LOC, index=None, placeholder="", key="sb_device_location_1")
+
+                # r3: OLT, IP (disabled), VLAN (disabled)
+                r3c1, r3c2, r3c3 = st.columns(3)
+                with r3c1:
+                    olt_c_val = st.text_input("OLT", key="olt_c", placeholder="Click 🔍︎ to auto fill")
+                with r3c2:
+                    st.text_input("IP", key="ip_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
+                with r3c3:
+                    st.text_input("VLAN", key="vlan_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
+
+                # r4: Packet Loss, High Ping, Second Number
+                r4c1, r4c2, r4c3 = st.columns(3)
+                with r4c1:
+                    packet_loss_val = st.text_input("Packet Loss", key="packet_loss_c", placeholder="e.g., 10%")
+                with r4c2:
+                    high_ping_val = st.text_input("High Ping", key="high_ping_c", placeholder="e.g., 180 ms")
                 with r4c3:
-                    if st.session_state.get("sb_type_of_complaint_1") == "Refund":
-                        try:
-                            outage_end = st.date_input("Outage End Date", key="outage_end_c")
-                        except Exception:
-                            outage_end = None
+                    # Show/require Second Number only for specific statuses or complaint types
+                    _ct_choice = st.session_state.get("sb_type_of_complaint_1")
+                    _status_choice = st.session_state.get("sb_complaint_status_1")
+                    _status_norm = (str(_status_choice).strip().lower() if _status_choice else "")
+                    _ct_norm = (str(_ct_choice).strip().lower() if _ct_choice else "")
+                    _show_second = bool((_status_norm in {"not solved", "pending"}) or (_ct_norm == "problem arising from the extender"))
+                    if _show_second:
+                        second_number = st.text_input("Second Number")
                     else:
                         st.empty()
-                # Disabled Call-Back / Follow-Up controls during creation
+                        second_number = ""
+
+                # r5: Outage Start/Kurdtel/Online Game | Outage End/Other (Online Game)
+                # initialize outage variables so they're in scope for save handler
+                outage_start = None
+                outage_end = None
                 r5c1, r5c2, r5c3 = st.columns(3)
                 with r5c1:
+                    # For Online Game Issue show Online Game controls; for Refund Request show outage dates
+                    if st.session_state.get("sb_type_of_complaint_1") == "Online Game Issue":
+                        # Online Game with 'Other' + adjacent input that shows instantly (no server rerun needed)
+                        _og_options = list(ONLINE_GAMES or [])
+                        if "Other" not in _og_options:
+                            _og_options.append("Other")
+                        st.selectbox(
+                            "Online Game",
+                            _og_options, index=None, placeholder="",
+                            key="online_game_c"
+                        )
+                        # Pure CSS toggle using :has() on stable Streamlit keys (no reruns, no JS)
+                        st.markdown(
+                            """
+                            <style>
+                            /* Hide the Other input by default */
+                            .st-key-online_game_other_c { display: none !important; }
+                            /* Show globally when Online Game is set to Other (works across columns) */
+                            .stApp:has(.st-key-online_game_c div[value="Other"]) .st-key-online_game_other_c { display: block !important; }
+                            </style>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    elif (str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund") and (str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"):
+                        # Ensure prior clears didn't leave an invalid default (e.g., empty string)
+                        if isinstance(st.session_state.get("outage_start_c", None), str):
+                            st.session_state.pop("outage_start_c", None)
+                        outage_start = st.date_input("Outage Start Date", key="outage_start_c")
+                    else:
+                        st.empty()
+                with r5c2:
+                    if st.session_state.get("sb_type_of_complaint_1") == "Online Game Issue":
+                        st.text_input("Other (Online Game)", key="online_game_other_c", placeholder="Enter game title")
+                    elif (str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund") and (str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"):
+                        if isinstance(st.session_state.get("outage_end_c", None), str):
+                            st.session_state.pop("outage_end_c", None)
+                        outage_end = st.date_input("Outage End Date", key="outage_end_c")
+                    else:
+                        st.empty()
+                with r5c3:
+                    st.empty()
+                # Disabled Call-Back / Follow-Up controls during creation
+                r6c1, r6c2, r6c3 = st.columns(3)
+                with r6c1:
                     st.selectbox(
                         "Call-Back Status", CALLBACK_STATUS,
                         index=None, placeholder="", key="callback_status_c", disabled=True
                     )
-                with r5c2:
+                with r6c2:
                     st.selectbox(
                         "Call-Back Reason", CALLBACK_REASON,
                         index=None, placeholder="", key="callback_reason_c", disabled=True
                     )
-                with r5c3:
+                with r6c3:
                     st.selectbox(
                         "Follow-Up Status", FOLLOWUP_STATUS,
                         index=None, placeholder="", key="followup_status_c", disabled=True
                     )
+
+                # r7: Assigned To (single)
+                # Initialize reminder state as optional (empty by default)
+                if "reminder_date_c" not in st.session_state:
+                    st.session_state["reminder_date_c"] = None
+                if "reminder_time_c" not in st.session_state:
+                    st.session_state["reminder_time_c"] = None
+
+                r7c1, r7c2, r7c3 = st.columns(3)
+                with r7c1:
+                    assigned_to_c = st.selectbox("Assigned To", ASSIGNED_TO, index=None, placeholder="", key="assigned_to_c")
+                # Always render reminder inputs; toggle visibility with CSS like Online Game 'Other'
+                with r7c2:
+                    st.date_input("Reminder Date", key="reminder_date_c")
+                    # Render a hidden marker when a date is selected; CSS will use this to reveal the time input
+                    if st.session_state.get("reminder_date_c"):
+                        st.markdown('<span class="reminder-date-has-value" style="display:none">has-date</span>', unsafe_allow_html=True)
+                with r7c3:
+                    # Prefill time to current time when a date is picked and time isn't set yet
+                    try:
+                        from datetime import datetime as _dt
+                        if st.session_state.get("reminder_date_c") and not st.session_state.get("reminder_time_c"):
+                            st.session_state["reminder_time_c"] = _dt.now().time().replace(second=0, microsecond=0)
+                    except Exception:
+                        pass
+                    st.time_input("Reminder Time", key="reminder_time_c")
+                # CSS: hide date/time by default; show date when self-assigned; show time when the date input has a value (pure CSS, like Online Game 'Other')
+                st.markdown(
+                    """
+                    <style>
+                    .st-key-reminder_date_c, .st-key-reminder_time_c { display: none !important; }
+                    .stApp:has(.st-key-assigned_to_c div[value=\"Dahi Nemutlu\"]) .st-key-reminder_date_c { display: block !important; }
+                    /* Show time when the Reminder Date input has a non-empty value (no rerun needed) */
+                    .stApp:has(.st-key-assigned_to_c div[value=\"Dahi Nemutlu\"]) 
+                          :has(.st-key-reminder_date_c input[value]:not([value=\"\"])) .st-key-reminder_time_c { display: block !important; }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
                 description_c = st.text_area("Description", height=100, placeholder="Describe the complaint…")
 
@@ -758,27 +1295,67 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                     rc_val = root_cause if "root_cause" in locals() else None
                     om_val = ont_model if "ont_model" in locals() else None
                     dl_val = device_location if "device_location" in locals() else None
-                    cs_val = complaint_status if "complaint_status" in locals() else None
+                    cs_val = st.session_state.get("sb_complaint_status_1")
                     tc_val = type_of_call_c if "type_of_call_c" in locals() else None
                     olt_val = st.session_state.get("olt_c", "").strip()
                     sn_val = str(second_number).strip() if "second_number" in locals() else ""
                     desc_val = str(description_c).strip() if "description_c" in locals() else ""
                     ks_val = st.session_state.get("kurdtel_status_c", "").strip()
+                    online_game_val = str(st.session_state.get("online_game_c") or "").strip()
+                    online_game_other = str(st.session_state.get("online_game_other_c") or "").strip()
+                    refund_type_val = str(st.session_state.get("sb_refund_type_1") or "").strip()
                     assigned_c = st.session_state.get("assigned_to_c") or (ASSIGNED_TO[0] if ASSIGNED_TO else "")
+                    # Reminder fields (only when self-assigned)
+                    current_agent = "Dahi Nemutlu"
+                    _self_assigned = str(assigned_c or "").strip() == current_agent
+                    rem_date = st.session_state.get("reminder_date_c")
+                    rem_time = st.session_state.get("reminder_time_c")
+                    reminder_at_str = ""
 
                     if not ct_val: missing.append("Complaint Type")
                     if not ont_val: missing.append("ONT ID")
                     if not es_val: missing.append("Employee Suggestion")
                     if not rc_val: missing.append("Root Cause")
                     if not om_val: missing.append("ONT Model")
-                    if not dl_val: missing.append("Device Location")
+                    if ct_val != "Kurdtel" and not dl_val: missing.append("Device Location")
                     if not cs_val: missing.append("Complaint Status")
                     if not tc_val: missing.append("Call Type")
                     if not olt_val: missing.append("OLT")
-                    if not sn_val: missing.append("Second Number")
+                    # Require Second Number only when visible/required (normalize for robustness)
+                    _cs_norm = (str(cs_val).strip().lower() if cs_val else "")
+                    _ct_norm2 = (str(ct_val).strip().lower() if ct_val else "")
+                    _require_second = bool((_cs_norm in {"not solved", "pending"}) or (_ct_norm2 == "problem arising from the extender"))
+                    if _require_second and not sn_val:
+                        missing.append("Second Number")
                     if not desc_val: missing.append("Description")
                     if ct_val == "Kurdtel" and not ks_val:
                         missing.append("Kurdtel Service Status")
+                    if ct_val == "Refund" and not refund_type_val:
+                        missing.append("Refund Type")
+
+                    # Require Online Game selection when complaint type is Online Game Issue
+                    if ct_val == "Online Game Issue" and not online_game_val:
+                        missing.append("Online Game")
+
+                    # Extra validation for Online Game 'Other'
+                    if ct_val == "Online Game Issue" and online_game_val == "Other" and not online_game_other:
+                        missing.append("Other (Online Game)")
+
+                    # Validate reminder when self-assigned (optional):
+                    # - If a date is set, require time; if both set, ensure future and combine
+                    if _self_assigned:
+                        if rem_date and not rem_time:
+                            missing.append("Reminder Time")
+                        elif rem_date and rem_time:
+                            try:
+                                from datetime import datetime as _dt
+                                _dt_combined = _dt.combine(rem_date, rem_time)
+                                if _dt_combined <= _dt.now():
+                                    missing.append("Reminder Date/Time (future)")
+                                else:
+                                    reminder_at_str = _dt_combined.isoformat()
+                            except Exception:
+                                missing.append("Reminder Date/Time")
 
                     if missing:
                         _color_missing_labels(missing)
@@ -790,35 +1367,45 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                             "type_of_call": tc_val,
                             "description": desc_val,
                             "complaint_type": ct_val,
+                            "refund_type": refund_type_val if ct_val == "Refund" else "",
                             "employee_suggestion": es_val,
-                            "device_location": dl_val,
+                            "device_location": (dl_val if ct_val != "Kurdtel" else ""),
                             "root_cause": rc_val,
                             "ont_model": om_val,
                             "complaint_status": cs_val,
                             "kurdtel_service_status": ks_val if ct_val == "Kurdtel" else "",
+                            "online_game": ((online_game_val == "Other") and online_game_other or online_game_val) if ct_val == "Online Game Issue" else "",
                             "olt": olt_val,
                             "second_number": sn_val,
                             "assigned_to": assigned_c,
                             "outage_start_date": (outage_start.isoformat() if hasattr(outage_start, 'isoformat') else (str(outage_start) if outage_start else "")),
                             "outage_end_date": (outage_end.isoformat() if hasattr(outage_end, 'isoformat') else (str(outage_end) if outage_end else "")),
+                            "ip": st.session_state.get("ip_c", ""),
+                            "vlan": st.session_state.get("vlan_c", ""),
+                            "packet_loss": str(packet_loss_val or "").strip(),
+                            "high_ping": str(high_ping_val or "").strip(),
                             "callback_status": (st.session_state.get("callback_status_c") or ""),
                             "callback_reason": (st.session_state.get("callback_reason_c") or ""),
                             "followup_status": (st.session_state.get("followup_status_c") or "")
+                            ,
+                            "reminder_at": reminder_at_str
                         })
                         st.success("Complaint ticket added.")
                         st.session_state.show_new_form = False
                         st.rerun()
             # Developer notes: render complaints markdown below the form inside an expander
             try:
-                _dev_md_c = load_dev_note("complaints.md")
+                _dev_md_c = load_implementation_note("complaints.md")
                 if _dev_md_c:
-                    with st.expander("Developer notes (Complaints)", expanded=False):
+                    with st.expander("Implementation notes (Complaints)", expanded=False):
+                        st.markdown('<div class="implementation-notes-tag"></div>', unsafe_allow_html=True)
                         st.markdown(_dev_md_c)
             except Exception:
                 pass
 
-        # ---- OSP Appointments ----
-        with tabs[2]:
+    # ---- OSP Appointments ----
+    if 'tabs_by_label' in locals():
+        with tabs_by_label["OSP Appointments"]:
             o0c1, o0c2, o0c3 = st.columns(3)
             with o0c1:
                 st.selectbox(
@@ -830,6 +1417,11 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
             with o0c3: st.empty()
 
             with st.form("form_osp", clear_on_submit=False):
+                # Show OSP toast just above first row (ONT ID)
+                _msg = st.session_state.get('autofill_message_o')
+                _lvl = st.session_state.get('autofill_level_o')
+                if _msg:
+                    (st.warning if _lvl == 'warning' else st.info)(_msg)
                 if st.session_state.get("osp_pending_clear"):
                     st.session_state["ont_o"] = ""
                     st.session_state["ont_o_locked"] = ""
@@ -850,6 +1442,20 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                             o_autofill = st.form_submit_button("🔍︎", help="Fetch and autofill related details", use_container_width=True)
                         else:
                             o_remove = st.form_submit_button("❌︎", use_container_width=True)
+                # Handle deferred deep-link autofill once for OSP
+                if st.session_state.pop("_do_autofill_o", False):
+                    if st.session_state.get("ont_o", "").strip():
+                        try:
+                            st.session_state["city_o"] = CITY_OPTIONS[0] if CITY_OPTIONS else ""
+                        except Exception:
+                            st.session_state["city_o"] = st.session_state.get("city_o", "")
+                        st.session_state["fttg_o"] = "No"
+                        st.session_state["address_o"] = "Rizgary Quarter 412, Building 64, Sulaymaniyah, Kurdistan Region"
+                        st.session_state["ont_o_locked"] = True
+                        st.session_state["autofill_message_o"] = "Fields autofilled."
+                        st.session_state["autofill_level_o"] = "info"
+                        st.rerun()
+
                 with or1c2:
                     call_type_o = st.selectbox("Call Type", CALL_TYPES, index=(0 if CALL_TYPES else None), placeholder="", key="sb_type_of_call_3")
                 with or1c3:
@@ -862,7 +1468,7 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                                 st.session_state["city_o"] = CITY_OPTIONS[0] if CITY_OPTIONS else ""
                             except Exception:
                                 st.session_state["city_o"] = ""
-                            st.session_state["fttg_o"] = "Yes"
+                            st.session_state["fttg_o"] = "No"
                             st.session_state["address_o"] = "Rizgary Quarter 412, Building 64, Sulaymaniyah, Kurdistan Region"
                             st.session_state["ont_o_locked"] = True
                             st.session_state["autofill_message_o"] = "Fields autofilled."
@@ -961,38 +1567,178 @@ elif st.session_state.active_tab == "Call Center Tickets" and st.session_state.a
                         st.rerun()
             # Developer notes: render OSP appointments markdown below the form inside an expander
             try:
-                _dev_md_o = load_dev_note("osp_appointments.md")
+                _dev_md_o = load_implementation_note("osp_appointments.md")
                 if _dev_md_o:
-                    with st.expander("Developer notes (OSP Appointments)", expanded=False):
+                    with st.expander("Implementation notes (OSP Appointments)", expanded=False):
+                        st.markdown('<div class="implementation-notes-tag"></div>', unsafe_allow_html=True)
                         st.markdown(_dev_md_o)
             except Exception:
                 pass
-# ---------- Tickets table ----------
-df = st.session_state.tickets_df.copy()
+# ---------- Tickets table (only render in Call Tickets > Tickets) ----------
+if st.session_state.active_tab == "Call Tickets" and st.session_state.active_subtab == "Tickets":
+    df = st.session_state.tickets_df.copy()
 
-st.markdown("### Tickets")
-search = st.text_input("Search", placeholder="Search ONT / Description…", label_visibility="collapsed")
+    st.markdown("### Tickets")
+    search = st.text_input("Search", placeholder="Search ONT / Description…", label_visibility="collapsed")
 
-if search:
-    s = search.lower()
-    def row_match(row):
-        fields = ["ont_id", "description", "complaint_type", "activity_inquiry_type",
-                  "kurdtel_service_status",
-                  "osp_type", "second_number", "olt", "city", "issue_type", "fttg", "assigned_to", "address"]
-        return any(str(row.get(f, "")).lower().find(s) >= 0 for f in fields)
-    df = df[df.apply(row_match, axis=1)]
+    if search:
+        s = search.lower()
+        def row_match(row):
+            fields = [
+                "ont_id", "description", "complaint_type", "activity_inquiry_type",
+                "kurdtel_service_status", "online_game",
+                "osp_type", "second_number", "olt", "city", "issue_type", "fttg", "assigned_to", "address"
+            ]
+            return any(str(row.get(f, "")).lower().find(s) >= 0 for f in fields)
+        df = df[df.apply(row_match, axis=1)]
+
+    # Prepare Ticket Group options for filtering (used under tabs)
+    # Always include preset groups so the dropdown has values even when no records exist
+    PRESET_TICKET_GROUPS = [
+        "Activities & Inquiries",
+        "Complaints",
+        "OSP Appointments",
+    ]
+    try:
+        _groups_series = df.get("ticket_group") if isinstance(df, pd.DataFrame) else None
+        _from_data = (
+            _groups_series.dropna().astype(str).tolist() if _groups_series is not None else []
+        )
+    except Exception:
+        _from_data = []
+    _combined = PRESET_TICKET_GROUPS + sorted(set(g for g in _from_data if g))
+    _seen = set()
+    _groups = []
+    for g in _combined:
+        gs = str(g).strip()
+        if gs and gs not in _seen:
+            _groups.append(gs)
+            _seen.add(gs)
+    TICKET_GROUP_FILTER_OPTIONS = ["All"] + _groups
+
+    # Helpers: export payload and UI (Excel icon with tooltip)
+    def _export_payload(df_in: pd.DataFrame) -> tuple[bytes, str, str]:
+        import io
+        b = io.BytesIO()
+        # Try Excel first; fall back to CSV if engines aren't available
+        try:
+            with pd.ExcelWriter(b) as writer:  # engine auto-detect
+                df_in.to_excel(writer, index=False, sheet_name="Tickets")
+            b.seek(0)
+            return b.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
+        except Exception:
+            try:
+                return df_in.to_csv(index=False).encode("utf-8-sig"), "text/csv", "csv"
+            except Exception:
+                return b"", "application/octet-stream", "bin"
+
+    def _ticket_group_filter_ui(
+        loc_key: str,
+        df_export: pd.DataFrame | None = None,
+        filename_prefix: str = "tickets",
+        show_filter: bool = True,
+        status_options: list[str] | None = None,
+        status_state_key: str | None = None,
+        status_label: str = "Complaint Status",
+    ):
+        from pathlib import Path
+        import base64
+        from datetime import datetime
+    # 3-column row; filter in first column, export icon in third
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if show_filter:
+                _current = st.session_state.get("ticket_group_filter", "All")
+                if _current not in TICKET_GROUP_FILTER_OPTIONS:
+                    _current = "All"
+                sel = st.selectbox(
+                    "Ticket Group",
+                    options=TICKET_GROUP_FILTER_OPTIONS,
+                    index=TICKET_GROUP_FILTER_OPTIONS.index(_current),
+                    key=f"ticket_group_filter_{loc_key}",
+                )
+                st.session_state["ticket_group_filter"] = sel
+            elif status_options and status_state_key:
+                # Complaint Status filter (used in Kurdtel tab only)
+                _opts = ["All"] + [o for o in status_options if o]
+                _cur = st.session_state.get(status_state_key, "All")
+                if _cur not in _opts:
+                    _cur = "All"
+                _widget_key = f"{status_state_key}_{loc_key}"
+                sel2 = st.selectbox(
+                    status_label,
+                    options=_opts,
+                    index=_opts.index(_cur),
+                    key=_widget_key,
+                )
+                st.session_state[status_state_key] = sel2
+            else:
+                # keep layout spacing without rendering the filter
+                st.write("")
+        with c3:
+            if df_export is not None:
+                # Build bytes for download
+                data, mime, ext = _export_payload(df_export)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                fname = f"{filename_prefix}_{ts}.{ext}"
+                # Load provided Excel.svg and embed as data URI
+                try:
+                    candidates = [
+                        Path(__file__).with_name("Excel.svg"),
+                        Path.cwd() / "Excel.svg",
+                        Path(__file__).resolve().parent.parent / "Excel.svg",
+                    ]
+                    svg_bytes = None
+                    for _p in candidates:
+                        if _p.exists():
+                            svg_bytes = _p.read_bytes()
+                            break
+                    if svg_bytes is None:
+                        raise FileNotFoundError("Excel.svg not found in known paths")
+                    svg_b64 = base64.b64encode(svg_bytes).decode("ascii")
+                    img_src = f"data:image/svg+xml;base64,{svg_b64}"
+                except Exception:
+                    # Fallback simple icon (emoji)
+                    img_src = None
+                # Build download link with icon only (no tooltip chip)
+                card_style = "display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:1px solid #cfd8dc;border-radius:8px;background:#ffffff;"
+                container_style = "display:flex;align-items:center;justify-content:flex-end;height:64px;"
+                if img_src:
+                    link_html = f"""
+                        <div style='{container_style}'>
+                            <a href='data:{mime};base64,{base64.b64encode(data).decode('ascii')}' download='{fname}' style='{card_style}'>
+                                <img src='{img_src}' alt='Export' style='width:22px;height:22px;display:block;' />
+                            </a>
+                        </div>
+                    """
+                else:
+                    link_html = f"""
+                        <div style='{container_style}'>
+                            <a href='data:{mime};base64,{base64.b64encode(data).decode('ascii')}' download='{fname}' style='{card_style};text-decoration:none;'>📥</a>
+                        </div>
+                    """
+                st.markdown(link_html, unsafe_allow_html=True)
+
+    def _apply_ticket_group_filter(df_in: pd.DataFrame) -> pd.DataFrame:
+        try:
+            sel = st.session_state.get("ticket_group_filter", "All")
+            if sel and sel != "All" and "ticket_group" in df_in.columns:
+                return df_in[df_in["ticket_group"].astype(str) == sel]
+        except Exception:
+            pass
+        return df_in
 
 
 def _render_tickets_grid(df_input, ag_key: str | None = None):
     # Build display columns, keep same ordering as before
     display_cols = [
         "id", "created_at", "ticket_group", "ont_id", "type_of_call",
-        "activity_inquiry_type", "complaint_type", "employee_suggestion",
+    "activity_inquiry_type", "complaint_type", "refund_type", "online_game", "employee_suggestion",
         "device_location", "root_cause", "ont_model", "complaint_status", "callback_status", "callback_reason", "followup_status",
         "kurdtel_service_status",
         "osp_type", "city", "issue_type", "fttg", "olt", "second_number",
-        "fttx_job_status", "assigned_to", "fttx_cancel_reason",
-        "address", "description", "fttx_job_remarks"
+    "fttx_job_status", "assigned_to", "fttx_cancel_reason",
+    "address", "description", "fttx_job_remarks", "reminder_at"
     ]
     display_cols = [c for c in display_cols if c in df_input.columns]
 
@@ -1084,7 +1830,9 @@ def _render_tickets_grid(df_input, ag_key: str | None = None):
         "device_location": "Device Location",
         "root_cause": "Root Cause",
         "ont_model": "ONT Model",
+    "online_game": "Online Game",
         "complaint_status": "Complaint Status",
+    "refund_type": "Refund Type",
         "kurdtel_service_status": "Kurdtel Service Status",
         "osp_type": "OSP Appointment Type",
         "city": "City",
@@ -1101,6 +1849,7 @@ def _render_tickets_grid(df_input, ag_key: str | None = None):
         "callback_status": "Call-Back Status",
         "callback_reason": "Call-Back Reason",
         "followup_status": "Follow-Up Status",
+    "reminder_at": "Reminder At",
     }
 
     for _col, _label in _header_labels.items():
@@ -1213,17 +1962,51 @@ def _render_tickets_grid(df_input, ag_key: str | None = None):
         _lg.exception("Inline edit open failed: %s", _e)
 
 
-# Render tickets view: use a controlled selector so only the active grid is created.
-assigned_name = "Dahi Nemutlu"
-# Replace the radio selector with Streamlit tabs (visually native)
-tab_my, tab_all = st.tabs(["My Tickets", "All Tickets"])
-with tab_my:
-    # Filter to tickets assigned to the current user (case-insensitive)
-    if "assigned_to" in df.columns:
-        df_my = df[df["assigned_to"].astype(str).str.lower() == assigned_name.lower()]
-    else:
-        df_my = df.iloc[0:0]
-    _render_tickets_grid(df_my, ag_key="aggrid_my")
+if st.session_state.active_tab == "Call Tickets" and st.session_state.active_subtab == "Tickets":
+    # Render tickets view: use a controlled selector so only the active grid is created.
+    assigned_name = "Dahi Nemutlu"
+    # Replace the radio selector with Streamlit tabs (visually native)
+    tab_my, tab_all, tab_kurdtel = st.tabs(["My Tickets", "All Tickets", "Kurdtel"])
+    with tab_my:
+        # Filter to tickets assigned to the current user (case-insensitive)
+        if "assigned_to" in df.columns:
+            df_my = df[df["assigned_to"].astype(str).str.lower() == assigned_name.lower()]
+        else:
+            df_my = df.iloc[0:0]
+        df_my = _apply_ticket_group_filter(df_my)
+        _ticket_group_filter_ui("my", df_export=df_my, filename_prefix="my_tickets")
+        _render_tickets_grid(df_my, ag_key="aggrid_my")
 
-with tab_all:
-    _render_tickets_grid(df, ag_key="aggrid_all")
+    with tab_all:
+        df_all = _apply_ticket_group_filter(df)
+        _ticket_group_filter_ui("all", df_export=df_all, filename_prefix="all_tickets")
+        _render_tickets_grid(df_all, ag_key="aggrid_all")
+
+    with tab_kurdtel:
+        # Filter to complaint tickets of type Kurdtel
+        try:
+            mask = (
+                df.get("ticket_group", pd.Series(dtype=str)).astype(str).str.lower().eq("complaints") &
+                df.get("complaint_type", pd.Series(dtype=str)).astype(str).str.lower().eq("kurdtel")
+            )
+            df_kurdtel = df[mask] if not df.empty else df.iloc[0:0]
+        except Exception:
+            df_kurdtel = df.iloc[0:0]
+        df_kurdtel = _apply_ticket_group_filter(df_kurdtel)
+        # Apply Complaint Status filter (Kurdtel-only)
+        _status_sel = st.session_state.get("kurdtel_status_filter", "All")
+        if _status_sel and _status_sel != "All" and "complaint_status" in df_kurdtel.columns:
+            try:
+                df_kurdtel = df_kurdtel[df_kurdtel["complaint_status"].astype(str) == _status_sel]
+            except Exception:
+                pass
+        _ticket_group_filter_ui(
+            "kurdtel",
+            df_export=df_kurdtel,
+            filename_prefix="kurdtel_tickets",
+            show_filter=False,
+            status_options=COMP_STATUS,
+            status_state_key="kurdtel_status_filter",
+            status_label="Complaint Status",
+        )
+        _render_tickets_grid(df_kurdtel, ag_key="aggrid_kurdtel")

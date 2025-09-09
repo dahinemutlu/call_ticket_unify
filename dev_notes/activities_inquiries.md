@@ -1,2 +1,0 @@
-- When the **Activity / Inquiry Type** is `iQ Digicare`, display the **iQ Digicare Issue Type** dropdown.
-- **Call Type** dropdown should default to `Inbound`.

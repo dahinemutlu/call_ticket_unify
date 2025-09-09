@@ -1,0 +1,10 @@
+- When **Complaint Type** is `Refund`: show the **Refund Type** dropdown. Show the **Outage Start Date** and **Outage End Date** fields only when **Refund Type** is `Refund Request`.
+- When **Complaint Type** is `Kurdtel`: show the **Kurdtel Service Status** dropdown. This field is read-only in the create flow and will be populated automatically (autofill) from the Kurdtel service.
+- When **Complaint Type** is `Kurdtel`: hide the **Device Location** field (do not show or require it).
+- When **Complaint Type** is `Online Game Issue`: show and require the **Online Game** dropdown. Show the text input **Other (Online Game)** only when `Online Game` is set to `Other`.
+- **Call-Back Status**, **Call-Back Reason**, **Follow-Up Status** fields are hidden during ticket creation and only appear when editing an existing complaint ticket.
+- When the user clicks the autofill button (🔍), the app should fetch and populate `ONT Model` and `OLT` for the provided ONT ID. After successful autofill the ONT input should be locked to prevent accidental changes.
+- **Call Type** dropdown should default to `Inbound`.
+- Show and require **Second Number** when **Complaint Status** is `Not Solved` or `Pending`.
+- Show and require **Second Number** when **Complaint Type** is `Problem arising from the extender` (regardless of status).
+- Otherwise, hide and do not require **Second Number**.

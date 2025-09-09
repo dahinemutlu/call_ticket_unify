@@ -11,6 +11,19 @@
 .topbar, .topbar * { color:#fff !important; }
 .brand { font-size:1.5rem; font-weight:800; white-space:nowrap; }
 
+/* Hamburger behavior */
+.burger { display:none; align-items:center; justify-content:center; background:rgba(255,255,255,0.10); border:0; border-radius:.5rem; padding:.35rem; cursor:pointer; }
+.burger-toggle { display:none; }
+/* Overlay + Drawer for hamburger */
+.hamburger-overlay { display:none; position:fixed; inset:0; z-index:1001; }
+.hamburger-overlay .overlay-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.45); }
+.hamburger-drawer { position:absolute; top:0; bottom:0; right:0; width:80vw; max-width:360px; background:#023058; box-shadow:-8px 0 24px rgba(0,0,0,0.35); display:flex; flex-direction:column; transform:translateX(100%); transition:transform .25s ease-in-out; }
+.hamburger-drawer .menu-header { display:flex; align-items:center; justify-content:space-between; padding:1rem; border-bottom:1px solid rgba(255,255,255,0.15); color:#fff; }
+.hamburger-drawer .menu-header .title { font-weight:700; font-size:1.1rem; }
+.hamburger-drawer .close-btn { display:inline-flex; align-items:center; justify-content:center; background:transparent; border:0; color:#fff; cursor:pointer; }
+.hamburger-overlay .menu-items { display:flex; flex-direction:column; gap:.25rem; padding:1rem; }
+.hamburger-overlay .menu-items .tab, .hamburger-overlay .menu-items .tab-disabled { width:100%; }
+
 /* Topbar tabs */
 .tabs {
   display:flex;
@@ -47,9 +60,19 @@
   vertical-align:middle;
 }
 
-/* Mobile truncation */
-@media (max-width: 640px) {
-  .tab, .tab-disabled { max-width:40vw; overflow:hidden; text-overflow:ellipsis; }
+/* Responsive collapse at breakpoint */
+@media (max-width: 1024px) {
+  .topbar .tabs { display:none; }
+  .topbar .burger { display:inline-flex; }
+  /* Show overlay+drawer only on small screens when toggled */
+  .topbar:has(#topbar-burger-toggle:checked) .hamburger-overlay { display:block; }
+  .topbar:has(#topbar-burger-toggle:checked) .hamburger-overlay .hamburger-drawer { transform:translateX(0); }
+}
+
+/* When burger toggle is checked, show menu */
+/* Ensure menu is hidden on larger screens even if toggle remains checked */
+@media (min-width: 1025px) {
+  .hamburger-overlay { display:none !important; }
 }
 
 /* Global button style (applies to most app buttons) */
@@ -82,12 +105,20 @@
 .subtabs {
   display: flex;
   gap: .5rem;
-  /* remove bottom padding so tab bottoms align with the bar edge */
   padding: .5rem 1rem 0 1rem;
-  background: #F5F7FB;
+  background: transparent; /* remove background color */
   border-bottom: 1px solid #E5E7EB;
   align-items: flex-end; /* ensure tabs align to the bottom of the bar */
+  flex-wrap: nowrap;            /* keep items on a single row */
+  overflow-x: auto;             /* scroll only when needed */
+  overflow-y: hidden;           /* prevent any vertical growth */
+  scrollbar-gutter: stable both-edges; /* reserve space for scrollbars where supported */
+  -webkit-overflow-scrolling: touch; /* smooth scrolling on touch */
 }
+
+/* Hide horizontal scrollbar while preserving scroll behavior */
+.subtabs { scrollbar-width: none; -ms-overflow-style: none; }
+.subtabs::-webkit-scrollbar { display: none; height: 0; }
 
 .subtabs a.subtab,
 .subtab {
@@ -101,6 +132,8 @@
   background: transparent;
   border: 1px solid transparent;
   font-weight: 500;
+  white-space: nowrap;       /* prevent label wrap inside a tab */
+  flex: 0 0 auto;            /* prevent shrinking that causes wrapping */
 }
 .subtab:hover { background: #F3F4F6; }
 
@@ -114,6 +147,13 @@
   padding-bottom: calc(.35rem - 3px) !important;
   font-weight: 600 !important;
   background: transparent !important;
+}
+
+/* Disabled subtabs: non-clickable visual + block pointer events */
+.subtab-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none; /* ensure not clickable */
 }
 
 /* Prevent global button styling from affecting subtabs — do NOT override subtab text color */
@@ -139,3 +179,144 @@
 
 /* neutralize any previous sibling rule that may conflict */
 .subtabs + * { margin-top: 0 !important; }
+
+/* Client page: minimal layout so left column fits content and right fills remaining space */
+#client-layout .stColumns {
+  display: grid !important;
+  grid-template-columns: max-content 1fr !important;
+  align-items: start;
+  column-gap: 12px;
+}
+
+/* Small helper styles for Client > CPEs expander card */
+.exp-card { margin: 8px 12px 0 12px; }
+.exp-card details { border: 1px solid #E5E7EB; border-radius: 10px; background: #ffffff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.exp-card details > summary { cursor: pointer; list-style: none; padding: 10px 12px; font-weight: 600; color: #023058; display:flex; align-items:center; gap:.5rem; }
+.exp-card details > summary::-webkit-details-marker { display: none; }
+.exp-card details[open] > summary { border-bottom: 1px solid #E5E7EB; }
+.exp-card .exp-content { padding: 12px; }
+/* 3-column lists matching left-side key/value style */
+.exp-card .kv-cols { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 0 24px; }
+.exp-card .kv-list { display:block; }
+.exp-card .kv-row { display:grid; grid-template-columns:max-content 1fr; align-items:center; gap:8px; padding:6px 0; }
+.exp-card .kv-sep { height:1px; background: rgba(0,0,0,0.10); margin:0; }
+.exp-card .kv-label { font-size: 13px; color:#6B7280; }
+.exp-card .kv-value { font-size: 14px; color:#111827; }
+@media (max-width: 1100px) { .exp-card .kv-cols { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+@media (max-width: 700px) { .exp-card .kv-cols { grid-template-columns: 1fr; } }
+
+/* Make rows look like left-side content: single column key/value pairs with thin separators */
+.exp-card .exp-item {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+.exp-card .exp-item + .exp-item { border-top: 1px solid rgba(0,0,0,0.10); }
+.exp-card .exp-item .k { font-size: 13px; color:#6B7280; text-transform: none; letter-spacing: 0; }
+.exp-card .exp-item .v { font-size: 14px; color:#111827; font-weight: 400; }
+/* Chevron indicator on the right */
+.exp-card details > summary::after {
+  content: "";
+  display: inline-block;
+  width: 0; height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid #67839B;
+  margin-left: auto;
+  transition: transform .15s ease;
+  transform-origin: 3px 50%;
+}
+.exp-card details[open] > summary::after { transform: rotate(90deg); }
+
+/* Action buttons row under title */
+.cpe-actions { display:flex; flex-wrap:wrap; gap:.5rem; padding: 8px 12px; border-bottom:1px solid #E5E7EB; }
+/* Match global primary button style */
+.cpe-btn {
+  display:inline-flex; align-items:center; gap:.35rem;
+  padding:.45rem .8rem;
+  border:1px solid #023058;
+  border-radius:.5rem;
+  background:#ffffff;
+  color:#023058;
+  font-weight:500;
+  text-decoration:none;
+  box-shadow:none;
+}
+.cpe-btn, .cpe-btn:visited, .cpe-btn:hover, .cpe-btn:active, .cpe-btn:focus { text-decoration: none !important; }
+.cpe-btn:not(.cpe-btn-disabled):hover { background:#023058; color:#ffffff; border-color:#023058; }
+.cpe-btn:not(.cpe-btn-disabled):active { background:#012A44; border-color:#012A44; color:#ffffff; }
+.cpe-btn .material-icons { font-size:18px; line-height:1; }
+.cpe-btn-disabled { opacity:.55; cursor:not-allowed; pointer-events:none; }
+.dt-green { color: #059669; font-weight: 600; }
+
+/* First CPE action button (New Ticket) */
+.cpe-actions .cpe-btn:first-child .material-icons { color: #ec4e26 !important; }
+.cpe-actions .cpe-btn:first-child:hover .material-icons,
+.cpe-actions .cpe-btn:first-child:active .material-icons,
+.cpe-actions .cpe-btn:first-child:focus .material-icons { color: #ffffff !important; }
+
+/* Dropdown menu in cpe-actions */
+.cpe-actions .dropdown .dropdown-item:active { background:#E5E7EB; }
+
+/* Show dropdown menu on hover */
+.cpe-actions .dropdown:hover .dropdown-menu { display:block; }
+/* Show when the hidden checkbox is checked (broad browser support) */
+.cpe-actions .dropdown .dropdown-item { display:block; padding:.5rem .75rem; color:#023058; text-decoration:none; }
+.cpe-actions .dropdown .dropdown-item:hover { background:#F3F4F6; }
+
+/* Checkbox-driven dropdown styling (pure CSS) */
+.cpe-actions .dropdown .nt-dropdown-toggle { position:absolute; opacity:0; pointer-events:none; }
+.cpe-actions .dropdown .dropdown-menu { display:none; }
+.cpe-actions .dropdown .nt-dropdown-toggle:checked ~ .dropdown-menu { display:block; }
+/* Overlay closes dropdown on outside click */
+.cpe-actions .dropdown .cpe-dd-overlay { display:none; }
+.cpe-actions .dropdown .nt-dropdown-toggle:checked ~ .cpe-dd-overlay {
+  display:block; position:fixed; inset:0; z-index:5; background:transparent;
+}
+/* Default + hover + open styles for trigger */
+.cpe-actions .cpe-dropdown-btn { background:#fff; color:#023058; border-color:#023058; }
+.cpe-actions .cpe-dropdown-btn .material-icons { color:#ec4e26 !important; }
+.cpe-actions .cpe-dropdown-btn:hover, .cpe-actions .cpe-dropdown-btn:focus-visible { background:#023058 !important; color:#fff !important; border-color:#023058 !important; }
+.cpe-actions .cpe-dropdown-btn:hover .material-icons, .cpe-actions .cpe-dropdown-btn:focus-visible .material-icons { color:#fff !important; }
+.cpe-actions .dropdown .nt-dropdown-toggle:checked + label.cpe-dropdown-btn { background:#023058 !important; color:#ffffff !important; border-color:#023058 !important; }
+.cpe-actions .dropdown .nt-dropdown-toggle:checked + label.cpe-dropdown-btn .material-icons { color:#ffffff !important; }
+
+/* New Ticket button icon*/
+.st-key-new_ticket_btn button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center; /* center icon + text as a group */
+  gap: .5rem;
+  background-image: none !important; /* ensure no leftover bg icon */
+}
+
+.st-key-new_ticket_btn button::before {
+  font-family: 'Material Icons';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-block;
+  content: "add_ic_call";
+  color: #ec4e26;
+}
+
+/* Turn icon white on hover/active */
+.st-key-new_ticket_btn button:hover::before,
+.st-key-new_ticket_btn button:active::before {
+  color: #ffffff;
+}
+
+/* Soft yellow header for any expander that contains a implementation-notes tag inside */
+div[data-testid="stExpander"]:has(.implementation-notes-tag) > div:first-child,
+details:has(.implementation-notes-tag) > summary,
+div[data-testid="stExpander"] [data-testid="stExpanderToggle"]:has(.implementation-notes-tag) {
+  background: #FFFBE6 !important;
+  border-radius: .5rem !important;
+  padding: .5rem .75rem !important;
+}

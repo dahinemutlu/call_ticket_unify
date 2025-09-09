@@ -1,0 +1,4 @@
+- When the **Activity / Inquiry Type** is `iQ Digicare`, display the **iQ Digicare Issue Type** dropdown.
+- **Call Type** dropdown should default to `Inbound`.
+- Do not display the **Assigned To** field; automatically assign the ticket to the current user.
+- Only display and require the **Description** field when **Activity / Inquiry Type** is `Faulty Device & Adapter` or `Information`. For all other activity types, hide **Description** and treat it as not required.

@@ -1,5 +1,0 @@
-- When **Complaint Type** is `Refund`: show the **Outage Start Date** and **Outage End Date** fields (date inputs). These fields are required for refund tickets.
-- When **Complaint Type** is `Kurdtel`: show the **Kurdtel Service Status** dropdown. This field is read-only in the create flow and will be populated automatically (autofill) from the Kurdtel service.
-- **Call-Back Status**, **Call-Back Reason**, **Follow-Up Status** fields are hidden during ticket creation and only appear when editing an existing complaint ticket.
-- When the user clicks the autofill button (🔍), the app should fetch and populate `ONT Model` and `OLT` for the provided ONT ID. After successful autofill the ONT input should be locked to prevent accidental changes.
-- **Call Type** dropdown should default to `Inbound`.
