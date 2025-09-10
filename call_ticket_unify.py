@@ -1683,23 +1683,14 @@ if st.session_state.active_tab == "Call Tickets" and st.session_state.active_sub
                 fname = f"{filename_prefix}_{ts}.{ext}"
                 # Load provided Excel.svg and embed as data URI
                 try:
-                    candidates = [
-                        Path(__file__).with_name("Excel.svg"),
-                        Path.cwd() / "Excel.svg",
-                        Path(__file__).resolve().parent.parent / "Excel.svg",
-                    ]
-                    svg_bytes = None
-                    for _p in candidates:
-                        if _p.exists():
-                            svg_bytes = _p.read_bytes()
-                            break
-                    if svg_bytes is None:
-                        raise FileNotFoundError("Excel.svg not found in known paths")
+                    svg_path = Path(__file__).with_name("assets").joinpath("Excel.svg")
+                    if not svg_path.exists():
+                        raise FileNotFoundError("assets/Excel.svg not found")
+                    svg_bytes = svg_path.read_bytes()
                     svg_b64 = base64.b64encode(svg_bytes).decode("ascii")
                     img_src = f"data:image/svg+xml;base64,{svg_b64}"
                 except Exception:
-                    # Fallback simple icon (emoji)
-                    img_src = None
+                    img_src = None  # fallback to emoji
                 # Build download link with icon only (no tooltip chip)
                 card_style = "display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:1px solid #cfd8dc;border-radius:8px;background:#ffffff;"
                 container_style = "display:flex;align-items:center;justify-content:flex-end;height:64px;"
