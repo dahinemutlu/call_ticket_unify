@@ -1,4 +1,7 @@
 streamlit
-pandas
-openpyxl>=3.1.0
 streamlit-aggrid
+pandas
+openpyxl
+SQLAlchemy
+psycopg[binary]
+python-dotenv
