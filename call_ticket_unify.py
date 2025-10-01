@@ -2242,7 +2242,7 @@ def _reset_new_ticket_fields():
     st.session_state.show_new_form = True
     for _k in [
         # Activities & Inquiries
-        'ont_ai','ont_ai_locked','ai_pending_clear','autofill_message_ai','autofill_level_ai','description_ai','channel_ai',
+        'ont_ai','ont_ai_locked','ai_pending_clear','autofill_message_ai','autofill_level_ai','description_ai','channel_ai','outage_start_ai','outage_end_ai',
     'sb_type_of_activity_inquiries_1','sb_digicare_issue_1','sb_call_type_1',
         # Complaints
         'ont_c','olt_c','olt_c_filled','ont_c_locked','c_pending_clear','autofill_message_c','autofill_level_c','description_c',
@@ -2258,7 +2258,7 @@ def _reset_new_ticket_fields():
         except Exception:
             pass
     # Ensure date/time widgets start unset to avoid type mismatches
-    for _k in ('reminder_date_c','reminder_time_c'):
+    for _k in ('reminder_date_c','reminder_time_c','outage_start_ai','outage_end_ai'):
         try:
             st.session_state.pop(_k, None)
         except Exception:
@@ -2293,7 +2293,7 @@ def _is_new_form_dirty() -> bool:
     """Return True if any known new-ticket fields have values indicating in-progress input."""
     candidates = [
         # AI
-    'ont_ai', 'sb_type_of_activity_inquiries_1', 'sb_digicare_issue_1', 'sb_call_type_1', 'channel_ai',
+    'ont_ai', 'sb_type_of_activity_inquiries_1', 'sb_digicare_issue_1', 'sb_call_type_1', 'channel_ai', 'outage_start_ai', 'outage_end_ai',
         # Complaints
         'ont_c', 'sb_type_of_complaint_1', 'sb_refund_type_1', 'sb_complaint_status_1', 'sb_call_type_2',
         'sb_employee_suggestion_1', 'sb_root_cause_1', 'ont_model', 'sb_device_location_1',
@@ -2996,6 +2996,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         st.session_state["ont_ai"] = ""
                         st.session_state["ont_ai_locked"] = ""
                         st.session_state["description_ai"] = ""
+                        st.session_state["outage_start_ai"] = None
+                        st.session_state["outage_end_ai"] = None
                         st.session_state["ai_pending_clear"] = False
 
                     ac1, ac2, ac3 = st.columns(3)
@@ -3025,8 +3027,31 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     with b3:
                         st.empty()
 
-                    # Description is only needed for certain activity types
-                    show_desc = (activity_choice in ("Faulty Device & Adapter", "Information"))
+                    is_refund_info = activity_choice == "Refund Info"
+                    is_refund_request = activity_choice == "Refund Request"
+
+                    # Show outage fields only for Refund Request
+                    if is_refund_request:
+                        st.session_state.setdefault("outage_start_ai", None)
+                        st.session_state.setdefault("outage_end_ai", None)
+                        r_out1, r_out2, r_out3 = st.columns(3)
+                        with r_out1:
+                            outage_start_ai = st.date_input("Outage Start Date", key="outage_start_ai")
+                        with r_out2:
+                            outage_end_ai = st.date_input("Outage End Date", key="outage_end_ai")
+                        with r_out3:
+                            st.empty()
+                    else:
+                        st.session_state.pop("outage_start_ai", None)
+                        st.session_state.pop("outage_end_ai", None)
+
+                    # Description is needed for select activity types
+                    show_desc = activity_choice in (
+                        "Faulty Device & Adapter",
+                        "Information",
+                        "Refund Info",
+                        "Refund Request",
+                    )
                     if show_desc:
                         description = st.text_area(
                             "Description",
@@ -3045,6 +3070,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         # Auto-assign creator to current user
                         created_by_ai = DEFAULT_CREATED_BY
                         missing = []
+                        outage_start_val = st.session_state.get("outage_start_ai") if is_refund_request else None
+                        outage_end_val = st.session_state.get("outage_end_ai") if is_refund_request else None
                         if not st.session_state.get("ont_ai", "").strip():
                             missing.append("ONT ID")
                         if not activity_type_val:
@@ -3054,12 +3081,26 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         if not channel_ai_val:
                             missing.append("Channel")
                         # Require Description only for specific activity types
-                        if (activity_type_val in ("Faulty Device & Adapter", "Information")) and (not str(description).strip()):
+                        if (
+                            activity_type_val in (
+                                "Faulty Device & Adapter",
+                                "Information",
+                                "Refund Info",
+                                "Refund Request",
+                            )
+                        ) and (not str(description).strip()):
                             missing.append("Description")
+                        if is_refund_request:
+                            if not outage_start_val:
+                                missing.append("Outage Start Date")
+                            if not outage_end_val:
+                                missing.append("Outage End Date")
                         if missing:
                             _color_missing_labels(missing)
                             st.error("Please fill required fields: " + ", ".join(missing))
                         else:
+                            outage_start_str = outage_start_val.isoformat() if outage_start_val else ""
+                            outage_end_str = outage_end_val.isoformat() if outage_end_val else ""
                             add_ticket({
                                 "ticket_group": "Activities & Inquiries",
                                 "ont_id": st.session_state["ont_ai"],
@@ -3068,6 +3109,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 "description": description,
                                 "activity_inquiry_type": activity_type_val,
                                 "digicare_issue_type": st.session_state.get("sb_digicare_issue_1", "") if activity_type_val == "iQ Digicare" else "",
+                                "outage_start_date": outage_start_str if is_refund_request else "",
+                                "outage_end_date": outage_end_str if is_refund_request else "",
                                 "created_by": created_by_ai,
                             })
                             st.success("Activities & Inquiries ticket added.")
@@ -3150,6 +3193,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         st.session_state["vlan_c"] = ""
                         st.session_state["packet_loss_c"] = ""
                         st.session_state["high_ping_c"] = ""
+                        st.session_state["ont_power_level_c"] = ""
+                        st.session_state["olt_power_level_c"] = ""
                         st.session_state["sip_c_value"] = ""
                         st.session_state["name_c_value"] = ""
                         st.session_state["kurdtel_device_type_c_value"] = ""
@@ -3202,6 +3247,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                             # Autofill IP/VLAN on deep-link autofill
                             st.session_state["ip_c"] = "10.49.72.000"
                             st.session_state["vlan_c"] = "3021"
+                            st.session_state["ont_power_level_c"] = "-21.000"
+                            st.session_state["olt_power_level_c"] = "-23.700"
                             if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
                                 st.session_state["sip_c_value"] = "12345"
                                 st.session_state["name_c_value"] = "Test"
@@ -3218,11 +3265,14 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     employee_suggestion = st.session_state.get("sb_employee_suggestion_1", "")
                     with r1c3:
                         if is_kurdtel:
-                            st.session_state["sip_c_display"] = st.session_state.get("sip_c_value") or ""
-                            st.text_input("SIP", key="sip_c_display", disabled=True)
                             if not employee_suggestion and EMP_SUGGESTION:
                                 employee_suggestion = EMP_SUGGESTION[0]
                             st.session_state["sb_employee_suggestion_1"] = employee_suggestion or ""
+                            st.selectbox(
+                                "Issue Type",
+                                ISSUE_TYPES, index=None, placeholder="",
+                                key="issue_type_kurdtel"
+                            )
                         else:
                             employee_suggestion = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=None, placeholder="", key="sb_employee_suggestion_1")
 
@@ -3230,6 +3280,10 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     high_ping_val = st.session_state.get("high_ping_c", "")
                     second_number_value = st.session_state.get("second_number_c", "")
                     olt_c_val = st.session_state.get("olt_c", "")
+                    if "ont_power_level_c" not in st.session_state:
+                        st.session_state["ont_power_level_c"] = ""
+                    if "olt_power_level_c" not in st.session_state:
+                        st.session_state["olt_power_level_c"] = ""
                     if not locked_c:
                         if c_autofill:
                             if st.session_state.get("ont_c", "").strip():
@@ -3247,6 +3301,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 # Autofill IP/VLAN on manual autofill
                                 st.session_state["ip_c"] = "10.49.72.000"
                                 st.session_state["vlan_c"] = "3021"
+                                st.session_state["ont_power_level_c"] = "-21.000"
+                                st.session_state["olt_power_level_c"] = "-23.700"
                                 if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
                                     st.session_state["sip_c_value"] = "12345"
                                     st.session_state["name_c_value"] = "Test"
@@ -3275,20 +3331,53 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     # Complaint Status is controlled above the form
                     # (r0c2 outside the form)
 
+                    _status_choice = st.session_state.get("sb_complaint_status_1")
+                    _status_norm = (str(_status_choice).strip().lower() if _status_choice else "")
+                    _ct_choice = st.session_state.get("sb_type_of_complaint_1")
+                    _ct_norm = (str(_ct_choice).strip().lower() if _ct_choice else "")
+                    _show_second = bool((_status_norm in {"not solved", "pending"}) or (_ct_norm == "problem arising from the extender"))
+
                     r2c1, r2c2, r2c3 = st.columns(3)
                     if is_kurdtel:
                         with r2c1:
-                            st.session_state["name_c_display"] = st.session_state.get("name_c_value") or ""
-                            st.text_input("Name", key="name_c_display", disabled=True)
+                            if _show_second:
+                                second_number_value = st.text_input(
+                                    "Second Number",
+                                    key="second_number_c",
+                                    placeholder="Click 🔍︎ to auto fill",
+                                )
+                            else:
+                                st.empty()
+                                second_number_value = ""
+                                st.session_state["second_number_c"] = ""
                         with r2c2:
+                            st.empty()
+                        with r2c3:
+                            st.empty()
+
+                        r3c1, r3c2, r3c3 = st.columns(3)
+                        with r3c1:
+                            st.session_state["name_c_display"] = st.session_state.get("name_c_value") or ""
+                            st.text_input(
+                                "Name",
+                                key="name_c_display",
+                                disabled=True,
+                                placeholder="Click 🔍︎ to auto fill",
+                            )
+                        with r3c2:
                             st.selectbox(
                                 "Kurdtel Service Status",
-                                KURDTEL_SERVICE_STATUS, index=None, placeholder="",
+                                KURDTEL_SERVICE_STATUS, index=None, placeholder="Click 🔍︎ to auto fill",
                                 key="kurdtel_status_c", disabled=True
                             )
-                        with r2c3:
+                        with r3c3:
                             st.session_state["kurdtel_device_type_c_display"] = st.session_state.get("kurdtel_device_type_c_value") or ""
-                            st.text_input("Kurdtel Device Type", key="kurdtel_device_type_c_display", disabled=True)
+                            st.text_input(
+                                "Kurdtel Device Type",
+                                key="kurdtel_device_type_c_display",
+                                disabled=True,
+                                placeholder="Click 🔍︎ to auto fill",
+                            )
                         root_cause = st.session_state.get("sb_root_cause_1", "")
                         device_location = st.session_state.get("sb_device_location_1", "")
                         ont_model = st.session_state.get("ont_model", "")
@@ -3298,68 +3387,34 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         with r2c2:
                             device_location = st.selectbox("Device Location", DEVICE_LOC, index=None, placeholder="", key="sb_device_location_1")
                         with r2c3:
-                            ont_model = st.selectbox("ONT Model", ONT_MODELS, index=None, placeholder="Click 🔍︎ to auto fill", key="ont_model")
-
-                    _status_choice = st.session_state.get("sb_complaint_status_1")
-                    _status_norm = (str(_status_choice).strip().lower() if _status_choice else "")
-                    _ct_choice = st.session_state.get("sb_type_of_complaint_1")
-                    _ct_norm = (str(_ct_choice).strip().lower() if _ct_choice else "")
-                    _show_second = bool((_status_norm in {"not solved", "pending"}) or (_ct_norm == "problem arising from the extender"))
-
-                    if is_kurdtel:
-                        r3c1, r3c2, r3c3 = st.columns(3)
-                        with r3c1:
-                            st.selectbox(
-                                "Issue Type",
-                                ISSUE_TYPES, index=None, placeholder="",
-                                key="issue_type_kurdtel"
-                            )
-                        with r3c2:
                             if _show_second:
                                 second_number_value = st.text_input("Second Number", key="second_number_c")
                             else:
                                 st.empty()
                                 second_number_value = ""
                                 st.session_state["second_number_c"] = ""
-                        with r3c3:
-                            st.empty()
+
+                    outage_start = None
+                    outage_end = None
+                    if is_kurdtel:
                         packet_loss_val = st.session_state.get("packet_loss_c", "")
                         high_ping_val = st.session_state.get("high_ping_c", "")
                         st.session_state.setdefault("ip_c", st.session_state.get("ip_c", ""))
                         st.session_state.setdefault("vlan_c", st.session_state.get("vlan_c", ""))
                         olt_c_val = st.session_state.get("olt_c", "")
                     else:
-                        # r3: OLT, IP (disabled), VLAN (disabled)
+                        # r3 (new order): Packet Loss, High Ping, spacer
                         r3c1, r3c2, r3c3 = st.columns(3)
                         with r3c1:
-                            olt_c_val = st.text_input("OLT", key="olt_c", placeholder="Click 🔍︎ to auto fill")
+                            packet_loss_val = st.text_input("Packet Loss (%)", key="packet_loss_c", placeholder="e.g., 10")
                         with r3c2:
-                            st.text_input("IP", key="ip_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
+                            high_ping_val = st.text_input("High Ping (ms)", key="high_ping_c", placeholder="e.g., 180")
                         with r3c3:
-                            st.text_input("VLAN", key="vlan_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
+                            st.empty()
 
-                        # r4: Packet Loss, High Ping, Second Number
+                        # r4: Online Game / Refund Request controls
                         r4c1, r4c2, r4c3 = st.columns(3)
                         with r4c1:
-                            packet_loss_val = st.text_input("Packet Loss (%)", key="packet_loss_c", placeholder="e.g., 10")
-                        with r4c2:
-                            high_ping_val = st.text_input("High Ping (ms)", key="high_ping_c", placeholder="e.g., 180")
-                        with r4c3:
-                            if _show_second:
-                                second_number_value = st.text_input("Second Number", key="second_number_c")
-                            else:
-                                st.empty()
-                                second_number_value = ""
-                                st.session_state["second_number_c"] = ""
-
-                    # r5: Outage Start/Kurdtel/Online Game | Outage End/Other (Online Game)
-                    # initialize outage variables so they're in scope for save handler
-                    outage_start = None
-                    outage_end = None
-                    if not is_kurdtel:
-                        r5c1, r5c2, r5c3 = st.columns(3)
-                        with r5c1:
-                            # For Online Game Issue show Online Game controls; for Refund Request show outage dates
                             if st.session_state.get("sb_type_of_complaint_1") == "Online Game Issue":
                                 # Online Game with 'Other' + adjacent input that shows instantly (no server rerun needed)
                                 _og_options = list(ONLINE_GAMES or [])
@@ -3382,41 +3437,92 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                     """,
                                     unsafe_allow_html=True,
                                 )
-                            elif (str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund") and (str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"):
+                            elif (
+                                str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund"
+                            ) and (
+                                str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"
+                            ):
                                 # Ensure prior clears didn't leave an invalid default (e.g., empty string)
                                 if isinstance(st.session_state.get("outage_start_c", None), str):
                                     st.session_state.pop("outage_start_c", None)
                                 outage_start = st.date_input("Outage Start Date", key="outage_start_c")
                             else:
                                 st.empty()
-                        with r5c2:
+                        with r4c2:
                             if st.session_state.get("sb_type_of_complaint_1") == "Online Game Issue":
                                 st.text_input("Other (Online Game)", key="online_game_other_c", placeholder="Enter game title")
-                            elif (str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund") and (str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"):
+                            elif (
+                                str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund"
+                            ) and (
+                                str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"
+                            ):
                                 if isinstance(st.session_state.get("outage_end_c", None), str):
                                     st.session_state.pop("outage_end_c", None)
                                 outage_end = st.date_input("Outage End Date", key="outage_end_c")
                             else:
                                 st.empty()
-                        with r5c3:
+                        with r4c3:
                             st.empty()
+
+                        # r5: ONT Model, ONT Power Level, OLT Power Level
+                        r5c1, r5c2, r5c3 = st.columns(3)
+                        with r5c1:
+                            ont_model = st.selectbox("ONT Model", ONT_MODELS, index=None, placeholder="Click 🔍︎ to auto fill", key="ont_model")
+                        with r5c2:
+                            st.text_input(
+                                "ONT Power Level",
+                                key="ont_power_level_c",
+                                placeholder="Click 🔍︎ to auto fill",
+                                disabled=True,
+                            )
+                        with r5c3:
+                            st.text_input(
+                                "OLT Power Level",
+                                key="olt_power_level_c",
+                                placeholder="Click 🔍︎ to auto fill",
+                                disabled=True,
+                            )
+
+                        # r6: OLT, IP (disabled), VLAN (disabled)
+                        r6c1, r6c2, r6c3 = st.columns(3)
+                        with r6c1:
+                            olt_c_val = st.text_input("OLT", key="olt_c", placeholder="Click 🔍︎ to auto fill")
+                        with r6c2:
+                            st.text_input("IP", key="ip_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
+                        with r6c3:
+                            st.text_input("VLAN", key="vlan_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
                     # Disabled Call-Back / Follow-Up controls during creation
-                    r6c1, r6c2, r6c3 = st.columns(3)
-                    with r6c1:
+                    r_cb1, r_cb2, r_cb3 = st.columns(3)
+                    with r_cb1:
                         st.selectbox(
                             "Call-Back Status", CALLBACK_STATUS,
                             index=None, placeholder="", key="callback_status_c", disabled=True
                         )
-                    with r6c2:
+                    with r_cb2:
                         st.selectbox(
                             "Call-Back Reason", CALLBACK_REASON,
                             index=None, placeholder="", key="callback_reason_c", disabled=True
                         )
-                    with r6c3:
+                    with r_cb3:
                         st.selectbox(
                             "Follow-Up Status", FOLLOWUP_STATUS,
                             index=None, placeholder="", key="followup_status_c", disabled=True
                         )
+
+                    if is_kurdtel:
+                        sip_c1, sip_c2, sip_c3 = st.columns(3)
+                        with sip_c1:
+                            st.session_state["sip_c_display"] = st.session_state.get("sip_c_value") or ""
+                            st.text_input(
+                                "SIP",
+                                key="sip_c_display",
+                                disabled=True,
+                                placeholder="Click 🔍︎ to auto fill",
+                            )
+                        with sip_c2:
+                            st.empty()
+                        with sip_c3:
+                            st.empty()
 
                     description_c = st.text_area(
                         "Description",
@@ -3805,13 +3911,13 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                 with or2c2:
                     fttg_val = st.selectbox(
                         "FTTG",
-                        FTTG_OPTIONS, index=None, placeholder="",
+                        FTTG_OPTIONS, index=None, placeholder="Click 🔍︎ to auto fill",
                         key="fttg_o", disabled=True
                     )
                 with or2c3:
                     city_val = st.selectbox(
                         "City",
-                        CITY_OPTIONS, index=None, placeholder="",
+                        CITY_OPTIONS, index=None, placeholder="Click 🔍︎ to auto fill",
                         key="city_o", disabled=True
                     )
 
@@ -3821,18 +3927,21 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     st.text_input(
                         "OLT",
                         key="olt_o",
+                        placeholder="Click 🔍︎ to auto fill",
                         disabled=True
                     )
                 with or3c2:
                     st.text_input(
                         "Line Card",
                         key="line_card_o",
+                        placeholder="Click 🔍︎ to auto fill",
                         disabled=True
                     )
                 with or3c3:
                     st.text_input(
                         "GPON",
                         key="gpon_o",
+                        placeholder="Click 🔍︎ to auto fill",
                         disabled=True
                     )
 
