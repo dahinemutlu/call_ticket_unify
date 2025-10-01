@@ -20,6 +20,7 @@ from sqlalchemy import (
     insert,
     select,
     update,
+    func,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError, NoSuchTableError
@@ -53,6 +54,7 @@ REMINDER_ALL_VALUE = "All"
 st.set_page_config(page_title="CALL_TICKET_UNIFY", layout="wide")
 
 APP_TIMEZONE = ZoneInfo("Asia/Baghdad")
+UTC_TIMEZONE = ZoneInfo("UTC")
 
 
 def _now_local() -> datetime:
@@ -60,11 +62,25 @@ def _now_local() -> datetime:
     return datetime.now(APP_TIMEZONE).replace(tzinfo=None)
 
 
-def _to_local_naive(dt: datetime) -> datetime:
-    """Normalize a datetime to the Baghdad timezone and strip tzinfo."""
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(APP_TIMEZONE)
-    return dt.replace(tzinfo=None)
+def _to_local_naive(dt: datetime, *, assume_utc_if_naive: bool = False) -> datetime:
+    """Normalize a datetime to the Baghdad timezone and strip tzinfo.
+
+    Parameters
+    ----------
+    dt:
+        Input datetime to convert.
+    assume_utc_if_naive:
+        When True, naive datetimes are interpreted as UTC before conversion.
+    """
+
+    if dt.tzinfo is None:
+        if assume_utc_if_naive:
+            dt = dt.replace(tzinfo=UTC_TIMEZONE)
+        else:
+            return dt.replace(tzinfo=None)
+
+    localized = dt.astimezone(APP_TIMEZONE)
+    return localized.replace(tzinfo=None)
 
 # Silence third-party FutureWarning spam from st_aggrid until the library upgrades its pandas usage.
 warnings.filterwarnings(
@@ -154,13 +170,15 @@ TICKET_COLUMN_ORDER = [
     "vlan",
     "packet_loss",
     "high_ping",
+    "visit_required",
     "reminder_enabled",
     "reminder_recipient",
     "reminder_note",
     "reminder_at",
+    "channel",
 ]
 
-BOOLEAN_COLUMNS = {"reminder_enabled"}
+BOOLEAN_COLUMNS = {"reminder_enabled", "visit_required"}
 DATE_COLUMNS = {"outage_start_date", "outage_end_date"}
 READ_ONLY_DETAIL_FIELDS = {"id", "created_at"}
 DETAIL_MULTILINE_FIELDS = {
@@ -180,7 +198,7 @@ GRID_DEFAULT_DISPLAY_COLUMNS = [
     "ont_model", "olt", "callback_status", "callback_reason", "followup_status",
     "issue_type", "fttg", "second_number", "fttx_job_status", "fttx_cancel_reason", "fttx_job_remarks",
     "refund_type", "online_game", "kurdtel_service_status", "city", "address", "description",
-    "reminder_enabled", "reminder_recipient", "reminder_note", "reminder_at",
+    "visit_required", "reminder_enabled", "reminder_recipient", "reminder_note", "reminder_at", "channel",
 ]
 
 GRID_REQUIRED_COLUMNS = ["id"]
@@ -262,6 +280,146 @@ def _reflect_tickets_table() -> Table:
 
 def _ticket_mutable_columns() -> list[str]:
     return [col.name for col in _reflect_tickets_table().columns if col.name != "id"]
+
+
+@lru_cache(maxsize=1)
+def _reflect_ticket_comments_table() -> Table:
+    engine = get_tickets_engine()
+    metadata = MetaData()
+    try:
+        table = Table("ticket_comments", metadata, autoload_with=engine)
+    except NoSuchTableError as exc:
+        logger.error("ticket_comments table not found in the configured database.")
+        raise RuntimeError(
+            "ticket_comments table not found in the configured database. Please create it before using ticket comments."
+        ) from exc
+    return table
+
+
+def _fetch_ticket_comments(ticket_id: int, *, engine: Optional[Engine] = None) -> list[dict[str, Any]]:
+    engine = engine or get_tickets_engine()
+    table = _reflect_ticket_comments_table()
+    stmt = (
+        select(table)
+        .where(table.c.ticket_id == ticket_id)
+        .order_by(table.c.created_at.asc(), table.c.id.asc())
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(stmt)
+        return [dict(row._mapping) for row in rows]
+
+
+def _fetch_ticket_comment_counts(*, engine: Optional[Engine] = None) -> dict[int, int]:
+    engine = engine or get_tickets_engine()
+    try:
+        table = _reflect_ticket_comments_table()
+    except RuntimeError:
+        return {}
+
+    stmt = select(table.c.ticket_id, func.count().label("count")).group_by(table.c.ticket_id)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(stmt)
+            counts: dict[int, int] = {}
+            for ticket_id, count in result:
+                if ticket_id is None:
+                    continue
+                try:
+                    counts[int(ticket_id)] = int(count or 0)
+                except (TypeError, ValueError):
+                    continue
+            return counts
+    except SQLAlchemyError as exc:
+        logger.exception("Failed to aggregate ticket comment counts: %s", exc)
+        return {}
+
+
+def _create_ticket_comment(
+    ticket_id: int,
+    author: str,
+    body: str,
+    *,
+    engine: Optional[Engine] = None,
+) -> dict[str, Any]:
+    cleaned_author = (author or "").strip()
+    cleaned_body = (body or "").strip()
+    if not cleaned_author:
+        raise ValueError("Author name is required to save a comment.")
+    if not cleaned_body:
+        raise ValueError("Comment text cannot be empty.")
+
+    engine = engine or get_tickets_engine()
+    table = _reflect_ticket_comments_table()
+    payload = {
+        "ticket_id": ticket_id,
+        "author": cleaned_author,
+        "body": cleaned_body,
+    }
+    if "created_at" in table.c:
+        payload.setdefault("created_at", _now_local())
+    stmt = insert(table).values(payload).returning(table)
+    with engine.begin() as conn:
+        result = conn.execute(stmt)
+        inserted = result.mappings().first()
+    return dict(inserted) if inserted is not None else payload
+
+
+def _handle_ticket_comment_submit(
+    ticket_id: int,
+    *,
+    body_state_key: str,
+    comment_success_key: str,
+    comment_error_key: str,
+) -> None:
+    body_value = (st.session_state.get(body_state_key) or "").strip()
+    if not body_value:
+        st.session_state[comment_error_key] = "Comment cannot be empty."
+        st.session_state.pop(comment_success_key, None)
+        return
+
+    try:
+        _create_ticket_comment(ticket_id, CURRENT_USER_NAME, body_value)
+    except ValueError as exc:
+        st.session_state[comment_error_key] = str(exc)
+        st.session_state.pop(comment_success_key, None)
+    except Exception as exc:
+        logger.exception("Failed to save comment for ticket %s: %s", ticket_id, exc)
+        st.session_state[comment_error_key] = "Couldn't save your comment. Please try again."
+        st.session_state.pop(comment_success_key, None)
+    else:
+        st.session_state[comment_success_key] = "Comment posted."
+        st.session_state.pop(comment_error_key, None)
+        st.session_state[body_state_key] = ""
+
+
+def _format_comment_timestamp(value: Any) -> str:
+    if value is None:
+        return ""
+
+    dt_value: Optional[datetime]
+    if isinstance(value, datetime):
+        dt_value = _to_local_naive(value)
+    else:
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+        except Exception:
+            parsed = pd.NaT
+        if pd.isna(parsed):
+            return ""
+        if isinstance(parsed, pd.Timestamp):
+            parsed = parsed.to_pydatetime()
+        if isinstance(parsed, datetime):
+            dt_value = _to_local_naive(parsed)
+        elif isinstance(parsed, date):
+            dt_value = datetime.combine(parsed, time.min)
+        else:
+            return str(value)
+
+    if dt_value is None:
+        return ""
+
+    formatted = dt_value.strftime("%b %d, %Y · %I:%M %p")
+    return formatted.replace(" 0", " ")
 
 
 def _extract_database_url_from_mapping(data: Mapping[str, Any]) -> Optional[str]:
@@ -534,6 +692,27 @@ def _fetch_tickets_dataframe(engine: Engine) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].fillna("")
 
+    comment_counts: dict[int, int] = {}
+    try:
+        comment_counts = _fetch_ticket_comment_counts(engine=engine)
+    except Exception as exc:
+        logger.exception("Failed to fetch ticket comment counts: %s", exc)
+        comment_counts = {}
+
+    if "id" in df.columns and not df.empty:
+        id_numeric = pd.to_numeric(df["id"], errors="coerce")
+        df["comment_count"] = [
+            int(comment_counts.get(int(val), 0)) if pd.notna(val) else 0
+            for val in id_numeric
+        ]
+    else:
+        df["comment_count"] = 0
+
+    try:
+        df["comment_count"] = df["comment_count"].fillna(0).astype(int)
+    except Exception:
+        df["comment_count"] = df["comment_count"].fillna(0)
+
     ordered_cols = [c for c in TICKET_COLUMN_ORDER if c in df.columns]
     extra_cols = [c for c in df.columns if c not in ordered_cols]
     if ordered_cols:
@@ -730,6 +909,8 @@ def _prepare_ticket_row(row: Dict[str, Any]) -> Dict[str, Any]:
     data.setdefault("reminder_recipient", "")
     data.setdefault("reminder_note", "")
     data.setdefault("reminder_at", "")
+    data.setdefault("channel", "")
+    data.setdefault("visit_required", False)
     return data
 
 
@@ -1198,6 +1379,7 @@ def _render_ticket_detail_page(ticket_id: int) -> None:
         "followup_status": {"options": lambda: FOLLOWUP_STATUS},
         "online_game": {"options": lambda: ONLINE_GAMES, "include_other": True},
         "created_by": {"options": lambda: CREATED_BY_OPTIONS or ([DEFAULT_CREATED_BY] if DEFAULT_CREATED_BY else []), "allow_blank": False},
+        "channel": {"options": lambda: CHANNEL_OPTIONS, "allow_blank": False},
     }
 
     def _resolve_select_options(field: str) -> tuple[list[str], bool]:
@@ -1335,11 +1517,9 @@ def _render_ticket_detail_page(ticket_id: int) -> None:
                             st.session_state[widget_key] = current_value
                         date_value = current_value or default_date or date.today()
                         picker_key = f"{widget_key}_picker"
-                        if picker_key not in st.session_state:
-                            st.session_state[picker_key] = date_value
+                        st.session_state.setdefault(picker_key, date_value)
                         selected_date = st.date_input(
                             label,
-                            value=st.session_state[picker_key],
                             key=picker_key,
                             disabled=field_disabled,
                         )
@@ -1412,9 +1592,81 @@ def _render_ticket_detail_page(ticket_id: int) -> None:
             if error_msg:
                 st.error(error_msg)
 
-        detail_tabs = st.tabs(["Conversation", "Ticket History"])
+        comment_success_key = f"_ticket_comment_success_{ticket_id}"
+        comment_error_key = f"_ticket_comment_error_{ticket_id}"
+        comment_success = st.session_state.get(comment_success_key)
+        comment_error = st.session_state.get(comment_error_key)
+
+        comments: list[dict[str, Any]] = []
+        comments_error: Optional[str] = None
+        try:
+            comments = _fetch_ticket_comments(ticket_id)
+        except RuntimeError as exc:
+            comments_error = str(exc)
+        except SQLAlchemyError as exc:
+            comments_error = "Couldn't load comments right now. Please try again."
+            logger.exception("Failed to load comments for ticket %s: %s", ticket_id, exc)
+        except Exception as exc:
+            comments_error = "Unexpected error while loading comments."
+            logger.exception("Unexpected error while loading comments for ticket %s: %s", ticket_id, exc)
+
+        comment_count = len(comments) if not comments_error else 0
+        detail_tabs = st.tabs([f"Comments ({comment_count})", "Ticket History"])
+
         with detail_tabs[0]:
-            st.write("TBD")
+            if comment_success:
+                st.success(comment_success)
+                st.session_state.pop(comment_success_key, None)
+                st.session_state.pop(comment_error_key, None)
+            elif comment_error:
+                st.error(comment_error)
+                st.session_state.pop(comment_error_key, None)
+                st.session_state.pop(comment_success_key, None)
+
+            if comments_error:
+                st.warning(comments_error)
+            else:
+                if comments:
+                    comment_cards: list[str] = []
+                    for comment in comments:
+                        author_text = str(comment.get("author") or "Anonymous")
+                        timestamp_text = _format_comment_timestamp(comment.get("created_at"))
+                        body_text = (comment.get("body") or "").strip()
+                        body_html = escape(body_text).replace("\n", "<br />")
+                        card_html = (
+                            "<div class=\"ticket-comment\">"
+                            f"<div class=\"ticket-comment__meta\"><span class=\"ticket-comment__author\">{escape(author_text)}</span>"
+                            f"<span class=\"ticket-comment__time\">{escape(timestamp_text)}</span></div>"
+                            f"<div class=\"ticket-comment__body\">{body_html}</div>"
+                            "</div>"
+                        )
+                        comment_cards.append(card_html)
+                    st.markdown(
+                        '<div class="ticket-comments">' + "".join(comment_cards) + '</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.info("No comments yet.")
+
+                st.divider()
+
+                body_state_key = f"ticket_comment_body_{ticket_id}"
+                st.session_state.setdefault(body_state_key, "")
+
+                st.markdown("#### Add a comment")
+                with st.form(f"ticket_comment_form_{ticket_id}"):
+                    st.text_area("Comment", key=body_state_key, height=140)
+                    st.form_submit_button(
+                        "Post comment",
+                        on_click=_handle_ticket_comment_submit,
+                        kwargs={
+                            "ticket_id": ticket_id,
+                            "body_state_key": body_state_key,
+                            "comment_success_key": comment_success_key,
+                            "comment_error_key": comment_error_key,
+                        },
+                    )
+
         with detail_tabs[1]:
             st.write("TBD")
 
@@ -1853,6 +2105,7 @@ FOLLOWUP_STATUS        = load_dim_options("cx_dim_followup_status.xlsx", [])
 DIGICARE_ISSUES        = load_dim_options("cx_dim_digicare_issue.xlsx", [])
 ONLINE_GAMES          = load_dim_options("cx_dim_online_game.xlsx", [])
 REFUND_TYPES           = load_dim_options("cx_dim_refund_type.xlsx", ["Refund Info", "Refund Request"])
+CHANNEL_OPTIONS        = load_dim_options("cx_dim_channel.xlsx", ["Call Center"])
 
 DEFAULT_CREATED_BY = (
     CREATED_BY_OPTIONS[0]
@@ -1989,15 +2242,15 @@ def _reset_new_ticket_fields():
     st.session_state.show_new_form = True
     for _k in [
         # Activities & Inquiries
-        'ont_ai','ont_ai_locked','ai_pending_clear','autofill_message_ai','autofill_level_ai',
+        'ont_ai','ont_ai_locked','ai_pending_clear','autofill_message_ai','autofill_level_ai','description_ai','channel_ai',
     'sb_type_of_activity_inquiries_1','sb_digicare_issue_1','sb_call_type_1',
         # Complaints
-        'ont_c','olt_c','olt_c_filled','ont_c_locked','c_pending_clear','autofill_message_c','autofill_level_c',
-    'sb_type_of_complaint_1','sb_refund_type_1','sb_complaint_status_1','sb_call_type_2','sb_employee_suggestion_1','sb_root_cause_1','ont_model','sb_device_location_1',
-    'kurdtel_status_c','online_game_c','online_game_other_c','outage_start_c','outage_end_c',
+        'ont_c','olt_c','olt_c_filled','ont_c_locked','c_pending_clear','autofill_message_c','autofill_level_c','description_c',
+    'sb_type_of_complaint_1','sb_refund_type_1','sb_complaint_status_1','sb_call_type_2','sb_employee_suggestion_1','sb_root_cause_1','ont_model','sb_device_location_1','channel_c',
+    'kurdtel_status_c','online_game_c','online_game_other_c','outage_start_c','outage_end_c','sip_c_value','name_c_value','kurdtel_device_type_c_value','issue_type_kurdtel','second_number_c',
     'reminder_recipient_c','reminder_note_c','reminder_date_c','reminder_time_c',
         # OSP
-    'ont_o','ont_o_locked','osp_pending_clear','autofill_message_o','autofill_level_o','city_o','fttg_o','address_o',
+    'ont_o','ont_o_locked','osp_pending_clear','autofill_message_o','autofill_level_o','city_o','fttg_o','address_o','olt_o','line_card_o','gpon_o','issue_type_o','description_o','channel_o',
     'sb_call_type_3','sb_osp_appointment_type_1','second_number_o',
     ]:
         try:
@@ -2025,19 +2278,30 @@ def _reset_new_ticket_fields():
     except Exception:
         pass
 
+    try:
+        if CHANNEL_OPTIONS:
+            st.session_state['channel_ai'] = CHANNEL_OPTIONS[0]
+            st.session_state['channel_c'] = CHANNEL_OPTIONS[0]
+            st.session_state['channel_o'] = CHANNEL_OPTIONS[0]
+        else:
+            for _k in ['channel_ai', 'channel_c', 'channel_o']:
+                st.session_state.pop(_k, None)
+    except Exception:
+        pass
+
 def _is_new_form_dirty() -> bool:
     """Return True if any known new-ticket fields have values indicating in-progress input."""
     candidates = [
         # AI
-        'ont_ai', 'sb_type_of_activity_inquiries_1', 'sb_digicare_issue_1', 'sb_call_type_1',
+    'ont_ai', 'sb_type_of_activity_inquiries_1', 'sb_digicare_issue_1', 'sb_call_type_1', 'channel_ai',
         # Complaints
         'ont_c', 'sb_type_of_complaint_1', 'sb_refund_type_1', 'sb_complaint_status_1', 'sb_call_type_2',
         'sb_employee_suggestion_1', 'sb_root_cause_1', 'ont_model', 'sb_device_location_1',
         'olt_c', 'kurdtel_status_c', 'online_game_c', 'online_game_other_c', 'outage_start_c', 'outage_end_c',
-        'ip_c', 'vlan_c', 'packet_loss_c', 'high_ping_c',
+    'ip_c', 'vlan_c', 'packet_loss_c', 'high_ping_c', 'channel_c',
         'reminder_enabled_c', 'reminder_note_c', 'reminder_date_c', 'reminder_time_c',
         # OSP
-        'ont_o', 'sb_osp_appointment_type_1', 'sb_call_type_3', 'second_number_o', 'fttg_o', 'city_o', 'address_o',
+    'ont_o', 'sb_osp_appointment_type_1', 'sb_call_type_3', 'second_number_o', 'fttg_o', 'city_o', 'address_o', 'channel_o',
     ]
     for k in candidates:
         v = st.session_state.get(k)
@@ -2101,9 +2365,19 @@ def edit_ticket_dialog(ticket_id: int):
         if row.get("created_by") in _creator_options:
             _creator_index = _creator_options.index(row.get("created_by"))
         created_by_value = st.selectbox("Created By", _creator_options, index=_creator_index, placeholder="")
+        channel_index = None
+        if CHANNEL_OPTIONS and row.get("channel") in CHANNEL_OPTIONS:
+            channel_index = CHANNEL_OPTIONS.index(row.get("channel"))
+        channel_value = st.selectbox(
+            "Channel",
+            CHANNEL_OPTIONS,
+            index=channel_index if CHANNEL_OPTIONS else None,
+            placeholder="",
+        ) if CHANNEL_OPTIONS else (row.get("channel") or "")
 
         # Group-specific
         updates = {}
+        updates["channel"] = channel_value
         if g == "Activities & Inquiries":
             act = st.selectbox("Activity / Inquiry Type", ACTIVITY_TYPES, index=(ACTIVITY_TYPES.index(row["activity_inquiry_type"]) if row.get("activity_inquiry_type") in ACTIVITY_TYPES else None), placeholder="")
             desc = st.text_area("Description", value=str(row.get("description") or ""), height=120)
@@ -2324,6 +2598,7 @@ if st.session_state.active_tab == "Call Tickets" and st.session_state.active_sub
         ("Complaint Status", "COMP_STATUS"),
         ("Refund Type", "REFUND_TYPES"),
         ("Online Game", "ONLINE_GAMES"),
+    ("Channel", "CHANNEL_OPTIONS"),
         ("City", "CITY_OPTIONS"),
         ("Issue Type", "ISSUE_TYPES"),
     ("Kurdtel Service Status", "KURDTEL_SERVICE_STATUS"),
@@ -2584,6 +2859,8 @@ if st.session_state.active_tab == "Client":
                                     <div class="kv-row"><div class="kv-label">Serial</div><div class="kv-value">CXNK00000000</div></div>
                                     <div class="kv-sep"></div>
                                     <div class="kv-row"><div class="kv-label">MAC</div><div class="kv-value">ccbe.5991.0000</div></div>
+                                    <div class="kv-sep"></div>
+                                    <div class="kv-row"><div class="kv-label">Line Card</div><div class="kv-value">Cisco NCS 5500</div></div>
                                 </div>
                                 <div class="kv-list">
                                     <div class="kv-row"><div class="kv-label">Operational Status</div><div class="kv-value">enable</div></div>
@@ -2593,6 +2870,8 @@ if st.session_state.active_tab == "Client":
                                     <div class="kv-row"><div class="kv-label">IP</div><div class="kv-value">10.49.72.000</div></div>
                                     <div class="kv-sep"></div>
                                     <div class="kv-row"><div class="kv-label">VLAN</div><div class="kv-value">3021</div></div>
+                                    <div class="kv-sep"></div>
+                                    <div class="kv-row"><div class="kv-label">GPON</div><div class="kv-value">2.5G/1.25G</div></div>
                                 </div>
                             </div>
                         </div>
@@ -2693,6 +2972,20 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                 with a0c2: st.empty()
                 with a0c3: st.empty()
 
+                a1c1, a1c2, a1c3 = st.columns(3)
+                with a1c1:
+                    st.selectbox(
+                        "Channel",
+                        CHANNEL_OPTIONS,
+                        index=(0 if CHANNEL_OPTIONS else None),
+                        placeholder="",
+                        key="channel_ai",
+                    )
+                with a1c2:
+                    st.empty()
+                with a1c3:
+                    st.empty()
+
                 with st.form("form_ai", clear_on_submit=False):
                     # Show AI toast just above first row (ONT ID)
                     _msg = st.session_state.get('autofill_message_ai')
@@ -2702,6 +2995,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     if st.session_state.get("ai_pending_clear"):
                         st.session_state["ont_ai"] = ""
                         st.session_state["ont_ai_locked"] = ""
+                        st.session_state["description_ai"] = ""
                         st.session_state["ai_pending_clear"] = False
 
                     ac1, ac2, ac3 = st.columns(3)
@@ -2734,13 +3028,20 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     # Description is only needed for certain activity types
                     show_desc = (activity_choice in ("Faulty Device & Adapter", "Information"))
                     if show_desc:
-                        description = st.text_area("Description", height=100, placeholder="Enter details…")
+                        description = st.text_area(
+                            "Description",
+                            height=100,
+                            placeholder="Enter details…",
+                            key="description_ai",
+                        )
                     else:
+                        st.session_state["description_ai"] = ""
                         description = ""
 
                     save_ai = st.form_submit_button("Save Activities & Inquiries")
                     if save_ai:
                         activity_type_val = st.session_state.get("sb_type_of_activity_inquiries_1")
+                        channel_ai_val = st.session_state.get("channel_ai") or ""
                         # Auto-assign creator to current user
                         created_by_ai = DEFAULT_CREATED_BY
                         missing = []
@@ -2750,6 +3051,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                             missing.append("Activity / Inquiry Type")
                         if not call_type:
                             missing.append("Call Type")
+                        if not channel_ai_val:
+                            missing.append("Channel")
                         # Require Description only for specific activity types
                         if (activity_type_val in ("Faulty Device & Adapter", "Information")) and (not str(description).strip()):
                             missing.append("Description")
@@ -2761,6 +3064,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 "ticket_group": "Activities & Inquiries",
                                 "ont_id": st.session_state["ont_ai"],
                                 "call_type": call_type,
+                                "channel": channel_ai_val,
                                 "description": description,
                                 "activity_inquiry_type": activity_type_val,
                                 "digicare_issue_type": st.session_state.get("sb_digicare_issue_1", "") if activity_type_val == "iQ Digicare" else "",
@@ -2815,6 +3119,20 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                 with s0c3:
                     st.empty()
 
+                ch0c1, ch0c2, ch0c3 = st.columns(3)
+                with ch0c1:
+                    st.selectbox(
+                        "Channel",
+                        CHANNEL_OPTIONS,
+                        index=(0 if CHANNEL_OPTIONS else None),
+                        placeholder="",
+                        key="channel_c",
+                    )
+                with ch0c2:
+                    st.empty()
+                with ch0c3:
+                    st.empty()
+
                 with st.form("form_complaint", clear_on_submit=False):
                     # Show Complaints toast just above first row (ONT ID)
                     _msg = st.session_state.get('autofill_message_c')
@@ -2832,6 +3150,13 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         st.session_state["vlan_c"] = ""
                         st.session_state["packet_loss_c"] = ""
                         st.session_state["high_ping_c"] = ""
+                        st.session_state["sip_c_value"] = ""
+                        st.session_state["name_c_value"] = ""
+                        st.session_state["kurdtel_device_type_c_value"] = ""
+                        st.session_state["issue_type_kurdtel"] = ""
+                        st.session_state["second_number_c"] = ""
+                        st.session_state["description_c"] = ""
+                        st.session_state["visit_required_c"] = False
                         st.session_state["c_pending_clear"] = False
 
                     r1c1, r1c2, r1c3 = st.columns(3)
@@ -2877,16 +3202,34 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                             # Autofill IP/VLAN on deep-link autofill
                             st.session_state["ip_c"] = "10.49.72.000"
                             st.session_state["vlan_c"] = "3021"
+                            if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
+                                st.session_state["sip_c_value"] = "12345"
+                                st.session_state["name_c_value"] = "Test"
+                                st.session_state["kurdtel_device_type_c_value"] = "Test"
                             st.session_state["olt_c_filled"] = True
                             st.session_state["ont_c_locked"] = True
                             st.session_state["autofill_message_c"] = "Fields autofilled."
                             st.session_state["autofill_level_c"] = "info"
                             st.rerun()
-                    # Row 1: c2 = Call Type, c3 = Employee Suggestion
+                    # Row 1: c2 = Call Type, c3 varies by complaint type
                     with r1c2:
                         call_type_c = st.selectbox("Call Type", CALL_TYPES, index=(0 if CALL_TYPES else None), placeholder="", key="sb_call_type_2")
+                    is_kurdtel = st.session_state.get("sb_type_of_complaint_1") == "Kurdtel"
+                    employee_suggestion = st.session_state.get("sb_employee_suggestion_1", "")
                     with r1c3:
-                        employee_suggestion = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=None, placeholder="", key="sb_employee_suggestion_1")
+                        if is_kurdtel:
+                            st.session_state["sip_c_display"] = st.session_state.get("sip_c_value") or ""
+                            st.text_input("SIP", key="sip_c_display", disabled=True)
+                            if not employee_suggestion and EMP_SUGGESTION:
+                                employee_suggestion = EMP_SUGGESTION[0]
+                            st.session_state["sb_employee_suggestion_1"] = employee_suggestion or ""
+                        else:
+                            employee_suggestion = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=None, placeholder="", key="sb_employee_suggestion_1")
+
+                    packet_loss_val = st.session_state.get("packet_loss_c", "")
+                    high_ping_val = st.session_state.get("high_ping_c", "")
+                    second_number_value = st.session_state.get("second_number_c", "")
+                    olt_c_val = st.session_state.get("olt_c", "")
                     if not locked_c:
                         if c_autofill:
                             if st.session_state.get("ont_c", "").strip():
@@ -2904,6 +3247,10 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 # Autofill IP/VLAN on manual autofill
                                 st.session_state["ip_c"] = "10.49.72.000"
                                 st.session_state["vlan_c"] = "3021"
+                                if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
+                                    st.session_state["sip_c_value"] = "12345"
+                                    st.session_state["name_c_value"] = "Test"
+                                    st.session_state["kurdtel_device_type_c_value"] = "Test"
                                 st.session_state["olt_c_filled"] = True
                                 st.session_state["ont_c_locked"] = True
                                 try:
@@ -2929,95 +3276,130 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     # (r0c2 outside the form)
 
                     r2c1, r2c2, r2c3 = st.columns(3)
-                    with r2c1:
-                        root_cause = st.selectbox("Root Cause", ROOT_CAUSE, index=None, placeholder="", key="sb_root_cause_1")
-                    with r2c2:
-                        if st.session_state.get("sb_type_of_complaint_1") == "Kurdtel":
+                    if is_kurdtel:
+                        with r2c1:
+                            st.session_state["name_c_display"] = st.session_state.get("name_c_value") or ""
+                            st.text_input("Name", key="name_c_display", disabled=True)
+                        with r2c2:
                             st.selectbox(
                                 "Kurdtel Service Status",
                                 KURDTEL_SERVICE_STATUS, index=None, placeholder="",
                                 key="kurdtel_status_c", disabled=True
                             )
-                        else:
+                        with r2c3:
+                            st.session_state["kurdtel_device_type_c_display"] = st.session_state.get("kurdtel_device_type_c_value") or ""
+                            st.text_input("Kurdtel Device Type", key="kurdtel_device_type_c_display", disabled=True)
+                        root_cause = st.session_state.get("sb_root_cause_1", "")
+                        device_location = st.session_state.get("sb_device_location_1", "")
+                        ont_model = st.session_state.get("ont_model", "")
+                    else:
+                        with r2c1:
+                            root_cause = st.selectbox("Root Cause", ROOT_CAUSE, index=None, placeholder="", key="sb_root_cause_1")
+                        with r2c2:
                             device_location = st.selectbox("Device Location", DEVICE_LOC, index=None, placeholder="", key="sb_device_location_1")
-                    with r2c3:
-                        ont_model = st.selectbox("ONT Model", ONT_MODELS, index=None, placeholder="Click 🔍︎ to auto fill", key="ont_model")
+                        with r2c3:
+                            ont_model = st.selectbox("ONT Model", ONT_MODELS, index=None, placeholder="Click 🔍︎ to auto fill", key="ont_model")
 
-                    # r3: OLT, IP (disabled), VLAN (disabled)
-                    r3c1, r3c2, r3c3 = st.columns(3)
-                    with r3c1:
-                        olt_c_val = st.text_input("OLT", key="olt_c", placeholder="Click 🔍︎ to auto fill")
-                    with r3c2:
-                        st.text_input("IP", key="ip_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
-                    with r3c3:
-                        st.text_input("VLAN", key="vlan_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
+                    _status_choice = st.session_state.get("sb_complaint_status_1")
+                    _status_norm = (str(_status_choice).strip().lower() if _status_choice else "")
+                    _ct_choice = st.session_state.get("sb_type_of_complaint_1")
+                    _ct_norm = (str(_ct_choice).strip().lower() if _ct_choice else "")
+                    _show_second = bool((_status_norm in {"not solved", "pending"}) or (_ct_norm == "problem arising from the extender"))
 
-                    # r4: Packet Loss, High Ping, Second Number
-                    r4c1, r4c2, r4c3 = st.columns(3)
-                    with r4c1:
-                        packet_loss_val = st.text_input("Packet Loss", key="packet_loss_c", placeholder="e.g., 10%")
-                    with r4c2:
-                        high_ping_val = st.text_input("High Ping", key="high_ping_c", placeholder="e.g., 180 ms")
-                    with r4c3:
-                        # Show/require Second Number only for specific statuses or complaint types
-                        _ct_choice = st.session_state.get("sb_type_of_complaint_1")
-                        _status_choice = st.session_state.get("sb_complaint_status_1")
-                        _status_norm = (str(_status_choice).strip().lower() if _status_choice else "")
-                        _ct_norm = (str(_ct_choice).strip().lower() if _ct_choice else "")
-                        _show_second = bool((_status_norm in {"not solved", "pending"}) or (_ct_norm == "problem arising from the extender"))
-                        if _show_second:
-                            second_number = st.text_input("Second Number")
-                        else:
+                    if is_kurdtel:
+                        r3c1, r3c2, r3c3 = st.columns(3)
+                        with r3c1:
+                            st.selectbox(
+                                "Issue Type",
+                                ISSUE_TYPES, index=None, placeholder="",
+                                key="issue_type_kurdtel"
+                            )
+                        with r3c2:
+                            if _show_second:
+                                second_number_value = st.text_input("Second Number", key="second_number_c")
+                            else:
+                                st.empty()
+                                second_number_value = ""
+                                st.session_state["second_number_c"] = ""
+                        with r3c3:
                             st.empty()
-                            second_number = ""
+                        packet_loss_val = st.session_state.get("packet_loss_c", "")
+                        high_ping_val = st.session_state.get("high_ping_c", "")
+                        st.session_state.setdefault("ip_c", st.session_state.get("ip_c", ""))
+                        st.session_state.setdefault("vlan_c", st.session_state.get("vlan_c", ""))
+                        olt_c_val = st.session_state.get("olt_c", "")
+                    else:
+                        # r3: OLT, IP (disabled), VLAN (disabled)
+                        r3c1, r3c2, r3c3 = st.columns(3)
+                        with r3c1:
+                            olt_c_val = st.text_input("OLT", key="olt_c", placeholder="Click 🔍︎ to auto fill")
+                        with r3c2:
+                            st.text_input("IP", key="ip_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
+                        with r3c3:
+                            st.text_input("VLAN", key="vlan_c", placeholder="Click 🔍︎ to auto fill", disabled=True)
+
+                        # r4: Packet Loss, High Ping, Second Number
+                        r4c1, r4c2, r4c3 = st.columns(3)
+                        with r4c1:
+                            packet_loss_val = st.text_input("Packet Loss (%)", key="packet_loss_c", placeholder="e.g., 10")
+                        with r4c2:
+                            high_ping_val = st.text_input("High Ping (ms)", key="high_ping_c", placeholder="e.g., 180")
+                        with r4c3:
+                            if _show_second:
+                                second_number_value = st.text_input("Second Number", key="second_number_c")
+                            else:
+                                st.empty()
+                                second_number_value = ""
+                                st.session_state["second_number_c"] = ""
 
                     # r5: Outage Start/Kurdtel/Online Game | Outage End/Other (Online Game)
                     # initialize outage variables so they're in scope for save handler
                     outage_start = None
                     outage_end = None
-                    r5c1, r5c2, r5c3 = st.columns(3)
-                    with r5c1:
-                        # For Online Game Issue show Online Game controls; for Refund Request show outage dates
-                        if st.session_state.get("sb_type_of_complaint_1") == "Online Game Issue":
-                            # Online Game with 'Other' + adjacent input that shows instantly (no server rerun needed)
-                            _og_options = list(ONLINE_GAMES or [])
-                            if "Other" not in _og_options:
-                                _og_options.append("Other")
-                            st.selectbox(
-                                "Online Game",
-                                _og_options, index=None, placeholder="",
-                                key="online_game_c"
-                            )
-                            # Pure CSS toggle using :has() on stable Streamlit keys (no reruns, no JS)
-                            st.markdown(
-                                """
-                                <style>
-                                /* Hide the Other input by default */
-                                .st-key-online_game_other_c { display: none !important; }
-                                /* Show globally when Online Game is set to Other (works across columns) */
-                                .stApp:has(.st-key-online_game_c div[value=\"Other\"]) .st-key-online_game_other_c { display: block !important; }
-                                </style>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                        elif (str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund") and (str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"):
-                            # Ensure prior clears didn't leave an invalid default (e.g., empty string)
-                            if isinstance(st.session_state.get("outage_start_c", None), str):
-                                st.session_state.pop("outage_start_c", None)
-                            outage_start = st.date_input("Outage Start Date", key="outage_start_c")
-                        else:
+                    if not is_kurdtel:
+                        r5c1, r5c2, r5c3 = st.columns(3)
+                        with r5c1:
+                            # For Online Game Issue show Online Game controls; for Refund Request show outage dates
+                            if st.session_state.get("sb_type_of_complaint_1") == "Online Game Issue":
+                                # Online Game with 'Other' + adjacent input that shows instantly (no server rerun needed)
+                                _og_options = list(ONLINE_GAMES or [])
+                                if "Other" not in _og_options:
+                                    _og_options.append("Other")
+                                st.selectbox(
+                                    "Online Game",
+                                    _og_options, index=None, placeholder="",
+                                    key="online_game_c"
+                                )
+                                # Pure CSS toggle using :has() on stable Streamlit keys (no reruns, no JS)
+                                st.markdown(
+                                    """
+                                    <style>
+                                    /* Hide the Other input by default */
+                                    .st-key-online_game_other_c { display: none !important; }
+                                    /* Show globally when Online Game is set to Other (works across columns) */
+                                    .stApp:has(.st-key-online_game_c div[value=\"Other\"]) .st-key-online_game_other_c { display: block !important; }
+                                    </style>
+                                    """,
+                                    unsafe_allow_html=True,
+                                )
+                            elif (str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund") and (str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"):
+                                # Ensure prior clears didn't leave an invalid default (e.g., empty string)
+                                if isinstance(st.session_state.get("outage_start_c", None), str):
+                                    st.session_state.pop("outage_start_c", None)
+                                outage_start = st.date_input("Outage Start Date", key="outage_start_c")
+                            else:
+                                st.empty()
+                        with r5c2:
+                            if st.session_state.get("sb_type_of_complaint_1") == "Online Game Issue":
+                                st.text_input("Other (Online Game)", key="online_game_other_c", placeholder="Enter game title")
+                            elif (str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund") and (str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"):
+                                if isinstance(st.session_state.get("outage_end_c", None), str):
+                                    st.session_state.pop("outage_end_c", None)
+                                outage_end = st.date_input("Outage End Date", key="outage_end_c")
+                            else:
+                                st.empty()
+                        with r5c3:
                             st.empty()
-                    with r5c2:
-                        if st.session_state.get("sb_type_of_complaint_1") == "Online Game Issue":
-                            st.text_input("Other (Online Game)", key="online_game_other_c", placeholder="Enter game title")
-                        elif (str(st.session_state.get("sb_type_of_complaint_1") or "").strip().lower() == "refund") and (str(st.session_state.get("sb_refund_type_1") or "").strip().lower() == "refund request"):
-                            if isinstance(st.session_state.get("outage_end_c", None), str):
-                                st.session_state.pop("outage_end_c", None)
-                            outage_end = st.date_input("Outage End Date", key="outage_end_c")
-                        else:
-                            st.empty()
-                    with r5c3:
-                        st.empty()
                     # Disabled Call-Back / Follow-Up controls during creation
                     r6c1, r6c2, r6c3 = st.columns(3)
                     with r6c1:
@@ -3036,7 +3418,12 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                             index=None, placeholder="", key="followup_status_c", disabled=True
                         )
 
-                    description_c = st.text_area("Description", height=100, placeholder="Describe the complaint…")
+                    description_c = st.text_area(
+                        "Description",
+                        height=100,
+                        placeholder="Describe the complaint…",
+                        key="description_c",
+                    )
 
                     # r7: Reminder toggle (Created By auto-assigned)
                     if "reminder_date_c" not in st.session_state:
@@ -3049,6 +3436,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         st.session_state["reminder_recipient_c"] = []
                     if "reminder_note_c" not in st.session_state:
                         st.session_state["reminder_note_c"] = ""
+                    if "visit_required_c" not in st.session_state:
+                        st.session_state["visit_required_c"] = False
 
                     r7c1, r7c2 = st.columns(2)
                     _current_recipients = st.session_state.get("reminder_recipient_c", [])
@@ -3112,9 +3501,15 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         placeholder="Add reminder details…",
                     )
 
+                    st.checkbox("Visit Required", key="visit_required_c")
+
                     save_c = st.form_submit_button("Save Complaint")
                     if save_c:
                         missing = []
+                        packet_loss_clean = str(st.session_state.get("packet_loss_c") or "").strip()
+                        high_ping_clean = str(st.session_state.get("high_ping_c") or "").strip()
+                        invalid_labels = []
+                        invalid_messages = []
 
                         ont_val = st.session_state.get("ont_c", "").strip()
                         ct_val = st.session_state.get("sb_type_of_complaint_1")
@@ -3125,7 +3520,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         cs_val = st.session_state.get("sb_complaint_status_1")
                         call_type_val = call_type_c if "call_type_c" in locals() else None
                         olt_val = st.session_state.get("olt_c", "").strip()
-                        sn_val = str(second_number).strip() if "second_number" in locals() else ""
+                        sn_val = str(second_number_value).strip()
                         desc_val = str(description_c).strip() if "description_c" in locals() else ""
                         ks_val = st.session_state.get("kurdtel_status_c", "").strip()
                         online_game_val = str(st.session_state.get("online_game_c") or "").strip()
@@ -3133,6 +3528,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         refund_type_val = str(st.session_state.get("sb_refund_type_1") or "").strip()
                         created_by_val = DEFAULT_CREATED_BY
                         reminder_enabled = bool(st.session_state.get("reminder_enabled_c"))
+                        channel_c_val = st.session_state.get("channel_c") or ""
                         reminder_recipients_selection = st.session_state.get("reminder_recipient_c")
                         if not isinstance(reminder_recipients_selection, list):
                             reminder_recipients_selection = _parse_reminder_recipients(reminder_recipients_selection)
@@ -3142,16 +3538,49 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         rem_date = st.session_state.get("reminder_date_c")
                         rem_time = st.session_state.get("reminder_time_c")
                         reminder_at_str = ""
+                        visit_required_flag = bool(st.session_state.get("visit_required_c"))
+
+                        if packet_loss_clean:
+                            try:
+                                packet_loss_num = float(packet_loss_clean)
+                            except ValueError:
+                                if "Packet Loss (%)" not in invalid_labels:
+                                    invalid_labels.append("Packet Loss (%)")
+                                invalid_messages.append("Packet Loss (%) must be a number between 1 and 100")
+                            else:
+                                if not (1 <= packet_loss_num <= 100):
+                                    if "Packet Loss (%)" not in invalid_labels:
+                                        invalid_labels.append("Packet Loss (%)")
+                                    invalid_messages.append("Packet Loss (%) must be between 1 and 100")
+                                else:
+                                    normalized_packet = f"{packet_loss_num:g}"
+                                    if normalized_packet != packet_loss_clean:
+                                        st.session_state["packet_loss_c"] = normalized_packet
+                                        packet_loss_clean = normalized_packet
+
+                        if high_ping_clean:
+                            try:
+                                high_ping_num = float(high_ping_clean)
+                            except ValueError:
+                                if "High Ping (ms)" not in invalid_labels:
+                                    invalid_labels.append("High Ping (ms)")
+                                invalid_messages.append("High Ping (ms) must be a number")
+                            else:
+                                normalized_high = f"{high_ping_num:g}"
+                                if normalized_high != high_ping_clean:
+                                    st.session_state["high_ping_c"] = normalized_high
+                                    high_ping_clean = normalized_high
 
                         if not ct_val: missing.append("Complaint Type")
                         if not ont_val: missing.append("ONT ID")
                         if not es_val: missing.append("Employee Suggestion")
-                        if not rc_val: missing.append("Root Cause")
+                        if ct_val != "Kurdtel" and not rc_val: missing.append("Root Cause")
                         if not om_val: missing.append("ONT Model")
                         if ct_val != "Kurdtel" and not dl_val: missing.append("Device Location")
                         if not cs_val: missing.append("Complaint Status")
                         if not call_type_val: missing.append("Call Type")
                         if not olt_val: missing.append("OLT")
+                        if not channel_c_val: missing.append("Channel")
                         # Require Second Number only when visible/required (normalize for robustness)
                         _cs_norm = (str(cs_val).strip().lower() if cs_val else "")
                         _ct_norm2 = (str(ct_val).strip().lower() if ct_val else "")
@@ -3190,9 +3619,16 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 except Exception:
                                     missing.append("Reminder Date/Time")
 
+                        error_messages = []
                         if missing:
                             _color_missing_labels(missing)
-                            st.error("Please fill in all required fields: " + ", ".join(missing))
+                            error_messages.append("Please fill in all required fields: " + ", ".join(missing))
+                        if invalid_messages:
+                            _color_missing_labels(invalid_labels)
+                            error_messages.append("Please fix the following: " + "; ".join(invalid_messages))
+
+                        if error_messages:
+                            st.error(" ".join(error_messages))
                         else:
                             add_ticket({
                                 "ticket_group": "Complaints",
@@ -3201,6 +3637,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 "description": desc_val,
                                 "complaint_type": ct_val,
                                 "refund_type": refund_type_val if ct_val == "Refund" else "",
+                                "channel": channel_c_val,
                                 "employee_suggestion": es_val,
                                 "device_location": (dl_val if ct_val != "Kurdtel" else ""),
                                 "root_cause": rc_val,
@@ -3215,11 +3652,12 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 "outage_end_date": (outage_end.isoformat() if hasattr(outage_end, 'isoformat') else (str(outage_end) if outage_end else "")),
                                 "ip": st.session_state.get("ip_c", ""),
                                 "vlan": st.session_state.get("vlan_c", ""),
-                                "packet_loss": str(packet_loss_val or "").strip(),
-                                "high_ping": str(high_ping_val or "").strip(),
+                                "packet_loss": packet_loss_clean,
+                                "high_ping": high_ping_clean,
                                 "callback_status": (st.session_state.get("callback_status_c") or ""),
                                 "callback_reason": (st.session_state.get("callback_reason_c") or ""),
                                 "followup_status": (st.session_state.get("followup_status_c") or ""),
+                                "visit_required": visit_required_flag,
                                 "reminder_enabled": reminder_enabled,
                                 "reminder_recipient": reminder_recipient if reminder_enabled else "",
                                 "reminder_note": reminder_note if reminder_enabled else "",
@@ -3253,6 +3691,20 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
             with o0c2: st.empty()
             with o0c3: st.empty()
 
+            oc0c1, oc0c2, oc0c3 = st.columns(3)
+            with oc0c1:
+                st.selectbox(
+                    "Channel",
+                    CHANNEL_OPTIONS,
+                    index=(0 if CHANNEL_OPTIONS else None),
+                    placeholder="",
+                    key="channel_o",
+                )
+            with oc0c2:
+                st.empty()
+            with oc0c3:
+                st.empty()
+
             with st.form("form_osp", clear_on_submit=False):
                 # Show OSP toast just above first row (ONT ID)
                 _msg = st.session_state.get('autofill_message_o')
@@ -3265,6 +3717,12 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     st.session_state["city_o"] = ""
                     st.session_state["fttg_o"] = ""
                     st.session_state["address_o"] = ""
+                    st.session_state["olt_o"] = ""
+                    st.session_state["line_card_o"] = ""
+                    st.session_state["gpon_o"] = ""
+                    st.session_state["issue_type_o"] = ""
+                    st.session_state["second_number_o"] = ""
+                    st.session_state["description_o"] = ""
                     st.session_state["osp_pending_clear"] = False
 
                 or1c1, or1c2, or1c3 = st.columns(3)
@@ -3296,6 +3754,9 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                             st.session_state["city_o"] = st.session_state.get("city_o", "")
                         st.session_state["fttg_o"] = "No"
                         st.session_state["address_o"] = "Rizgary Quarter 412, Building 64, Sulaymaniyah, Kurdistan Region"
+                        st.session_state["olt_o"] = "NTWK-Sul-Pasha-OLT-00"
+                        st.session_state["line_card_o"] = "Cisco NCS 5500"
+                        st.session_state["gpon_o"] = "2.5G/1.25G"
                         st.session_state["ont_o_locked"] = True
                         st.session_state["autofill_message_o"] = "Fields autofilled."
                         st.session_state["autofill_level_o"] = "info"
@@ -3304,7 +3765,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                 with or1c2:
                     call_type_o = st.selectbox("Call Type", CALL_TYPES, index=(0 if CALL_TYPES else None), placeholder="", key="sb_call_type_3")
                 with or1c3:
-                    second_number_o = st.text_input("Second Number")
+                    second_number_o = st.text_input("Second Number", key="second_number_o")
 
                 if not locked_o:
                     if o_autofill:
@@ -3315,6 +3776,9 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 st.session_state["city_o"] = ""
                             st.session_state["fttg_o"] = "No"
                             st.session_state["address_o"] = "Rizgary Quarter 412, Building 64, Sulaymaniyah, Kurdistan Region"
+                            st.session_state["olt_o"] = "NTWK-Sul-Pasha-OLT-00"
+                            st.session_state["line_card_o"] = "Cisco NCS 5500"
+                            st.session_state["gpon_o"] = "2.5G/1.25G"
                             st.session_state["ont_o_locked"] = True
                             st.session_state["autofill_message_o"] = "Fields autofilled."
                             st.session_state["autofill_level_o"] = "info"
@@ -3335,7 +3799,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                 with or2c1:
                     issue_type_o = st.selectbox(
                         "Issue Type",
-                        ISSUE_TYPES, index=None, placeholder=""
+                        ISSUE_TYPES, index=None, placeholder="",
+                        key="issue_type_o"
                     )
                 with or2c2:
                     fttg_val = st.selectbox(
@@ -3350,11 +3815,37 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         key="city_o", disabled=True
                     )
 
-                # Row 3: Address (full width)
+                # Row 3: OLT, Line Card, GPON
+                or3c1, or3c2, or3c3 = st.columns(3)
+                with or3c1:
+                    st.text_input(
+                        "OLT",
+                        key="olt_o",
+                        disabled=True
+                    )
+                with or3c2:
+                    st.text_input(
+                        "Line Card",
+                        key="line_card_o",
+                        disabled=True
+                    )
+                with or3c3:
+                    st.text_input(
+                        "GPON",
+                        key="gpon_o",
+                        disabled=True
+                    )
+
+                # Row 4: Address (full width)
                 address_o = st.text_area("Address", height=80, placeholder="Click 🔍︎ to auto fill", key="address_o")
 
-                # Row 4: Description (full width)
-                description_o = st.text_area("Description", height=100, placeholder="Describe the appointment…")
+                # Row 5: Description (full width)
+                description_o = st.text_area(
+                    "Description",
+                    height=100,
+                    placeholder="Describe the appointment…",
+                    key="description_o",
+                )
 
                 submitted_o = st.form_submit_button("Save OSP Appointment")
                 if submitted_o:
@@ -3370,6 +3861,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     desc_val  = str(description_o or "").strip()
                     address_val = str(st.session_state.get("address_o", "")).strip()
                     created_by_o = DEFAULT_CREATED_BY
+                    channel_o_val = st.session_state.get("channel_o") or ""
 
                     if not osp_val:  missing.append("OSP Appointment Type")
                     if not ont_val:  missing.append("ONT ID")
@@ -3380,6 +3872,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     if not fttg_sel: missing.append("FTTG")
                     if not desc_val: missing.append("Description")
                     if not address_val: missing.append("Address")
+                    if not channel_o_val: missing.append("Channel")
 
                     if missing:
                         _color_missing_labels(missing)
@@ -3393,6 +3886,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                             "second_number": sn_val,
                             "issue_type": issue_sel,
                             "call_type": call_sel,
+                            "channel": channel_o_val,
                             "fttg": fttg_sel,
                             "description": desc_val,
                             "address": address_val,
@@ -4026,6 +4520,8 @@ def _render_tickets_grid(
         c for c in GRID_DEFAULT_DISPLAY_COLUMNS
         if c == "ticket_type" or c in df_input.columns
     ]
+    if "comment_count" in df_input.columns and "comment_count" not in display_cols:
+        display_cols.append("comment_count")
     if not display_cols:
         display_cols = [c for c in df_input.columns if c != "_edit_request"]
 
@@ -4038,6 +4534,8 @@ def _render_tickets_grid(
     for col in ticket_type_source_cols:
         if col in df_input.columns and col not in source_cols:
             source_cols.append(col)
+    if "comment_count" in df_input.columns and "comment_count" not in source_cols:
+        source_cols.append("comment_count")
     if not source_cols:
         source_cols = [c for c in ticket_type_source_cols if c in df_input.columns]
 
@@ -4112,8 +4610,8 @@ def _render_tickets_grid(
         editable=False,
         resizable=True,
         filter=False,
-        flex=1,
         suppressMenu=True,
+        menuTabs=[],
     )
     gb.configure_selection(
         selection_mode="multiple",
@@ -4126,19 +4624,10 @@ def _render_tickets_grid(
         "Select",
         headerName="",
         pinned="left",
-        width=46,
-        minWidth=40,
-        maxWidth=60,
         checkboxSelection=True,
         headerCheckboxSelection=True,
         headerCheckboxSelectionFilteredOnly=True,
-        suppressMenu=True,
-        suppressSizeToFit=True,
         sortable=False,
-        filter=False,
-        resizable=False,
-        floatingFilter=False,
-        flex=0,
     )
 
     ellipsis_cell_style = {
@@ -4159,68 +4648,6 @@ def _render_tickets_grid(
             cellStyle=ellipsis_cell_style,
             tooltipField="address",
         )
-
-    # Compute data-driven widths so hidden-tab grids get sensible widths before client-side autosize
-    def _estimate_col_width(series, min_w=100, per_char=7, base=20, max_w=420):
-        try:
-            if series is None or series.empty:
-                max_len = 0
-            else:
-                max_len = int(series.dropna().astype(str).map(len).max())
-        except Exception:
-            max_len = 0
-        w = base + per_char * max_len
-        if w < min_w:
-            return min_w
-        if w > max_w:
-            return max_w
-        return int(w)
-
-    # Prepare a sample frame for width estimation (use shared reference when provided)
-    def _empty_sample(columns: list[str]) -> pd.DataFrame:
-        return pd.DataFrame({c: pd.Series(dtype=str) for c in columns}) if columns else pd.DataFrame()
-
-    _sample: pd.DataFrame | None = None
-    if isinstance(width_reference_df, pd.DataFrame):
-        try:
-            if not width_reference_df.empty:
-                _sample = width_reference_df.reindex(columns=display_cols)
-        except Exception:
-            _sample = None
-
-    if _sample is None or _sample.empty:
-        try:
-            if not df_view.empty:
-                _sample = df_view[display_cols]
-        except Exception:
-            _sample = None
-
-    if _sample is None or _sample.empty:
-        _sample = _empty_sample(display_cols)
-
-    try:
-        _sample = _sample.astype(str)
-    except Exception:
-        _sample = _empty_sample(display_cols)
-
-    # Apply widths (preserve a tighter fixed width for id)
-    for _c in display_cols:
-        if _c == "id":
-            # Use data-driven width for Ticket ID so it auto-adjusts to content
-            gw = _estimate_col_width(_sample[_c] if _c in _sample else None, min_w=80, per_char=8, base=10, max_w=200)
-            gb.configure_column("id", minWidth=80, width=gw)
-            continue
-        if _c == "created_at":
-            gw = _estimate_col_width(_sample[_c] if _c in _sample else None, min_w=170)
-            gb.configure_column("created_at", minWidth=170, width=gw)
-            continue
-        if _c == "ticket_group":
-            gw = _estimate_col_width(_sample[_c] if _c in _sample else None, min_w=150)
-            gb.configure_column("ticket_group", minWidth=150, width=gw)
-            continue
-        # default estimation for other columns
-        gw = _estimate_col_width(_sample[_c] if _c in _sample else None, min_w=120)
-        gb.configure_column(_c, minWidth=120, width=gw)
 
     _header_labels = {
         "id": "#",
@@ -4251,10 +4678,12 @@ def _render_tickets_grid(
         "callback_status": "Call-Back Status",
         "callback_reason": "Call-Back Reason",
         "followup_status": "Follow-Up Status",
+    "visit_required": "Visit Required",
         "reminder_enabled": "Reminder Set",
         "reminder_recipient": "Reminder Recipient",
         "reminder_note": "Reminder Note",
         "reminder_at": "Reminder At",
+        "channel": "Channel",
     }
 
     for _col, _label in _header_labels.items():
@@ -4289,34 +4718,26 @@ def _render_tickets_grid(
         gb.configure_column(
             "reminder_at",
             headerName=_header_labels.get("reminder_at", "Reminder At"),
-            suppressMenu=True,
-            menuTabs=[],
-            filter=False,
-            floatingFilter=False,
         )
 
     gb.configure_column("_edit_request", hide=True)
     gb.configure_column("_detail_request", hide=True)
+    if "comment_count" in df_view.columns:
+        gb.configure_column("comment_count", hide=True)
 
     gb.configure_column(
         "Edit",
         headerName="",
         pinned="left",
-    width=78,
-    minWidth=68,
-    maxWidth=96,
-        suppressSizeToFit=True,
-        flex=0,
-        filter=False,
         sortable=False,
-        suppressMenu=True,
-        floatingFilter=False,
-        resizable=False,
         cellRenderer=JsCode("""
             class IconCellRenderer {
                 init(params){
                     const idRaw = params && params.data ? params.data.id : null;
                     const id = (idRaw === null || idRaw === undefined) ? '' : String(idRaw);
+                    const commentCountRaw = params && params.data ? params.data.comment_count : null;
+                    const commentCount = (commentCountRaw === null || commentCountRaw === undefined) ? 0 : Number(commentCountRaw);
+                    const hasComments = !Number.isNaN(commentCount) && commentCount > 0;
 
                     if (params && params.eGridCell) {
                         try {
@@ -4350,6 +4771,15 @@ def _render_tickets_grid(
                     detailIcon.setAttribute('role', 'button');
                     detailIcon.setAttribute('tabindex', '0');
 
+                    const commentIcon = hasComments ? document.createElement('span') : null;
+                    if (commentIcon) {
+                        commentIcon.className = 'grid-action-icon grid-action-icon--comment';
+                        commentIcon.textContent = '💬';
+                        commentIcon.title = 'View comments';
+                        commentIcon.setAttribute('role', 'button');
+                        commentIcon.setAttribute('tabindex', '0');
+                    }
+
                     const dispatchEdit = (event) => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -4376,6 +4806,9 @@ def _render_tickets_grid(
 
                     editIcon.addEventListener('click', dispatchEdit);
                     detailIcon.addEventListener('click', dispatchDetail);
+                    if (commentIcon) {
+                        commentIcon.addEventListener('click', dispatchDetail);
+                    }
                     editIcon.addEventListener('keydown', (event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                             dispatchEdit(event);
@@ -4386,8 +4819,18 @@ def _render_tickets_grid(
                             dispatchDetail(event);
                         }
                     });
+                    if (commentIcon) {
+                        commentIcon.addEventListener('keydown', (event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                dispatchDetail(event);
+                            }
+                        });
+                    }
 
                     wrapper.appendChild(editIcon);
+                    if (commentIcon) {
+                        wrapper.appendChild(commentIcon);
+                    }
                     wrapper.appendChild(detailIcon);
                     this.eGui = wrapper;
                 }
@@ -4422,9 +4865,37 @@ def _render_tickets_grid(
         onFirstDataRendered=JsCode(
             """
             function(params){
-                try { params.api.sizeColumnsToFit(); } catch(e){}
-                try { setTimeout(function(){ params.api.resetRowHeights(); }, 0); } catch(e){}
-                try { params.api.closeToolPanel(); } catch(e){}
+                if (!params || !params.columnApi || !params.columnApi.autoSizeAllColumns) {
+                    return;
+                }
+
+                const autoSize = () => {
+                    try { params.columnApi.autoSizeAllColumns(); } catch (e) {}
+                    try { params.api.resetRowHeights(); } catch (e) {}
+                    try { params.api.closeToolPanel(); } catch (e) {}
+                };
+
+                window.requestAnimationFrame(autoSize);
+                [0, 120, 400].forEach((delay) => {
+                    window.setTimeout(autoSize, delay);
+                });
+            }
+            """
+        ),
+        onGridSizeChanged=JsCode(
+            """
+            function(params){
+                if (!params || !params.columnApi || !params.columnApi.autoSizeAllColumns) {
+                    return;
+                }
+
+                const run = () => {
+                    try { params.columnApi.autoSizeAllColumns(); } catch (e) {}
+                    try { params.api.resetRowHeights(); } catch (e) {}
+                };
+
+                window.requestAnimationFrame(run);
+                window.setTimeout(run, 150);
             }
             """
         ),
@@ -4432,13 +4903,32 @@ def _render_tickets_grid(
         rowSelection="multiple",
         rememberSelection=True,
         sideBar=side_bar_config,
-        suppressMenuHide=False,
         suppressHeaderMenuButton=True,
+        suppressColumnMenu=True,
+        columnMenu="none",
     )
 
     grid_options = gb.build()
-    grid_options.setdefault("rowSelection", "multiple")
-    grid_options.setdefault("rememberSelection", True)
+    grid_options.setdefault("columnMenu", "none")
+
+    default_col_def = grid_options.setdefault("defaultColDef", {})
+    default_col_def.setdefault("suppressMenu", True)
+    default_col_def.setdefault("menuTabs", [])
+    default_col_def.setdefault("suppressHeaderMenuButton", True)
+
+    col_defs = grid_options.get("columnDefs", [])
+    if isinstance(col_defs, list):
+        for _col_def in col_defs:
+            if isinstance(_col_def, dict):
+                _col_def.setdefault("suppressMenu", True)
+                _col_def.setdefault("menuTabs", [])
+                _col_def.setdefault("suppressHeaderMenuButton", True)
+
+    auto_group_def = grid_options.get("autoGroupColumnDef")
+    if isinstance(auto_group_def, dict):
+        auto_group_def.setdefault("suppressMenu", True)
+        auto_group_def.setdefault("menuTabs", [])
+        auto_group_def.setdefault("suppressHeaderMenuButton", True)
 
     update_mode = GridUpdateMode.MODEL_CHANGED
     if hasattr(GridUpdateMode, "SELECTION_CHANGED"):
@@ -4534,10 +5024,20 @@ if (
 ):
     # Render tickets view: use a controlled selector so only the active grid is created.
     creator_name = CURRENT_USER_NAME
-    # Replace the radio selector with Streamlit tabs (visually native)
-    tab_my, tab_all, tab_kurdtel = st.tabs(["My Tickets", "All Tickets", "Kurdtel"])
-    with tab_my:
-        # Filter to tickets created by the current user (case-insensitive)
+    view_choices = ["My Tickets", "All Tickets", "Kurdtel"]
+    default_choice = st.session_state.get("tickets_view_choice", "My Tickets")
+    if default_choice not in view_choices:
+        default_choice = "My Tickets"
+    selection = st.radio(
+        "Select ticket view",
+        options=view_choices,
+        index=view_choices.index(default_choice),
+        horizontal=True,
+        key="tickets_view_choice",
+        label_visibility="collapsed",
+    )
+
+    if selection == "My Tickets":
         if "created_by" in df.columns:
             df_my = df[df["created_by"].astype(str).str.lower() == creator_name.lower()]
         elif "assigned_to" in df.columns:
@@ -4554,7 +5054,7 @@ if (
         selected_my = _extract_selected_ticket_ids(grid_resp_my)
         _render_bulk_update_controls(action_col_my, selected_my, "my")
 
-    with tab_all:
+    elif selection == "All Tickets":
         df_all = _apply_ticket_group_filter(df, state_key="ticket_group_filter_all")
         action_col_all = _ticket_group_filter_ui("all", df_export=df_all, filename_prefix="all_tickets")
         grid_resp_all = _render_tickets_grid(
@@ -4565,8 +5065,7 @@ if (
         selected_all = _extract_selected_ticket_ids(grid_resp_all)
         _render_bulk_update_controls(action_col_all, selected_all, "all")
 
-    with tab_kurdtel:
-        # Filter to complaint tickets of type Kurdtel
+    else:  # Kurdtel
         try:
             mask = (
                 df.get("ticket_group", pd.Series(dtype=str)).astype(str).str.lower().eq("complaints") &
@@ -4576,7 +5075,6 @@ if (
         except Exception:
             df_kurdtel = df.iloc[0:0]
         df_kurdtel = _apply_ticket_group_filter(df_kurdtel, state_key="ticket_group_filter_kurdtel")
-        # Apply Complaint Status filter (Kurdtel-only)
         _status_widget_key = "kurdtel_status_filter_kurdtel"
         _status_sel = st.session_state.get(
             _status_widget_key,
