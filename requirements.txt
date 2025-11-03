@@ -1,5 +1,5 @@
 streamlit
-streamlit-aggrid
+streamlit-aggrid==1.1.7
 pandas
 openpyxl
 SQLAlchemy
