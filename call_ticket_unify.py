@@ -1672,7 +1672,7 @@ def _render_ticket_detail_page(ticket_id: int) -> None:
 
 # -------- State / routing --------
 if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "Call Tickets"
+    st.session_state.active_tab = "Home"
 
 # Honor query param
 if "tab" in st.query_params:
@@ -2740,7 +2740,10 @@ if st.session_state.active_tab == "Call Tickets" and st.session_state.active_sub
     # prevent the rest of the page (Tickets UI / grid) from rendering when on Settings
     st.stop()
 # original main content
-if st.session_state.active_tab == "Client":
+if st.session_state.active_tab == "Home":
+    st.title("Call Ticket Unify")
+    st.write("This is a prototype application.")
+elif st.session_state.active_tab == "Client":
     # Client page layout: two columns
     st.markdown('<div id="client-layout">', unsafe_allow_html=True)
     left, right = st.columns([2, 5], gap=None)
