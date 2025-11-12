@@ -1370,7 +1370,7 @@ def _render_ticket_detail_page(ticket_id: int) -> None:
         "complaint_status": {"options": lambda: COMP_STATUS},
         "kurdtel_service_status": {"options": lambda: KURDTEL_SERVICE_STATUS},
         "osp_type": {"options": lambda: OSP_TYPES},
-        "issue_type": {"options": lambda: ISSUE_TYPES},
+    "issue_type": {"options": _combined_issue_type_options},
         "fttg": {"options": lambda: FTTG_OPTIONS},
         "city": {"options": lambda: CITY_OPTIONS},
         "fttx_job_status": {"options": lambda: FTTX_JOB_STATUS},
@@ -2097,6 +2097,7 @@ COMP_STATUS            = load_dim_options("cx_dim_complaint_status.xlsx", ["Open
 CITY_OPTIONS           = load_dim_options("cx_dim_city.xlsx", [])
 ISSUE_TYPES            = load_dim_options("cx_dim_issue_type.xlsx", [])
 KURDTEL_SERVICE_STATUS = load_dim_options("cx_dim_kurdtel_service_status.xlsx", [])
+KURDTEL_ISSUE_TYPES     = load_dim_options("cx_dim_kurdtel_issue_type.xlsx", [])
 CREATED_BY_OPTIONS     = load_dim_options("cx_dim_assigned_to.xlsx", [])
 FTTX_JOB_STATUS        = load_dim_options("cx_dim_fttx_job_status.xlsx", ["In Progress", "Completed", "Cancelled"])
 CALLBACK_STATUS        = load_dim_options("cx_dim_callback_status.xlsx", [])
@@ -2114,6 +2115,14 @@ DEFAULT_CREATED_BY = (
 )
 if CURRENT_USER_NAME in CREATED_BY_OPTIONS:
     DEFAULT_CREATED_BY = CURRENT_USER_NAME
+
+
+def _combined_issue_type_options() -> list[str]:
+    merged: list[str] = list(ISSUE_TYPES or [])
+    for opt in (KURDTEL_ISSUE_TYPES or []):
+        if opt and opt not in merged:
+            merged.append(opt)
+    return merged
 
 
 def _build_reminder_recipient_options() -> list[str]:
@@ -2541,7 +2550,11 @@ def edit_ticket_dialog(ticket_id: int):
         elif g == "OSP Appointments":
             osp = st.selectbox("OSP Appointment Type", OSP_TYPES, index=(OSP_TYPES.index(row["osp_type"]) if row.get("osp_type") in OSP_TYPES else None), placeholder="")
             city = st.selectbox("City", CITY_OPTIONS, index=(CITY_OPTIONS.index(row["city"]) if row.get("city") in CITY_OPTIONS else None), placeholder="")
-            issue = st.selectbox("Issue Type", ISSUE_TYPES, index=(ISSUE_TYPES.index(row["issue_type"]) if row.get("issue_type") in ISSUE_TYPES else None), placeholder="")
+            _issue_options = _combined_issue_type_options()
+            _issue_default = None
+            if row.get("issue_type") in _issue_options:
+                _issue_default = _issue_options.index(row["issue_type"])
+            issue = st.selectbox("Issue Type", _issue_options, index=_issue_default, placeholder="")
             fttg = st.selectbox("FTTG", FTTG_OPTIONS, index=(FTTG_OPTIONS.index(row["fttg"]) if row.get("fttg") in FTTG_OPTIONS else None), placeholder="")
             second = st.text_input("Second Number", value=str(row.get("second_number") or ""))
             addr = st.text_area("Address", value=str(row.get("address") or ""), height=90)
@@ -3199,6 +3212,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         st.session_state["name_c_value"] = ""
                         st.session_state["kurdtel_device_type_c_value"] = ""
                         st.session_state["issue_type_kurdtel"] = ""
+                        st.session_state["kurdtel_issue_type"] = ""
                         st.session_state["second_number_c"] = ""
                         st.session_state["description_c"] = ""
                         st.session_state["visit_required_c"] = False
@@ -3275,6 +3289,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                             )
                         else:
                             employee_suggestion = st.selectbox("Employee Suggestion", EMP_SUGGESTION, index=None, placeholder="", key="sb_employee_suggestion_1")
+                            st.session_state["issue_type_kurdtel"] = ""
+                            st.session_state["kurdtel_issue_type"] = ""
 
                     packet_loss_val = st.session_state.get("packet_loss_c", "")
                     high_ping_val = st.session_state.get("high_ping_c", "")
@@ -3340,18 +3356,21 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                     r2c1, r2c2, r2c3 = st.columns(3)
                     if is_kurdtel:
                         with r2c1:
+                            st.selectbox(
+                                "Kurdtel Issue Type",
+                                KURDTEL_ISSUE_TYPES, index=None, placeholder="",
+                                key="kurdtel_issue_type"
+                            )
+                        with r2c2:
                             if _show_second:
                                 second_number_value = st.text_input(
                                     "Second Number",
                                     key="second_number_c",
-                                    placeholder="Click 🔍︎ to auto fill",
                                 )
                             else:
                                 st.empty()
                                 second_number_value = ""
                                 st.session_state["second_number_c"] = ""
-                        with r2c2:
-                            st.empty()
                         with r2c3:
                             st.empty()
 
@@ -3629,6 +3648,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         sn_val = str(second_number_value).strip()
                         desc_val = str(description_c).strip() if "description_c" in locals() else ""
                         ks_val = st.session_state.get("kurdtel_status_c", "").strip()
+                        kurdtel_issue_type_val = str(st.session_state.get("kurdtel_issue_type") or "").strip()
                         online_game_val = str(st.session_state.get("online_game_c") or "").strip()
                         online_game_other = str(st.session_state.get("online_game_other_c") or "").strip()
                         refund_type_val = str(st.session_state.get("sb_refund_type_1") or "").strip()
@@ -3696,6 +3716,8 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                         if not desc_val: missing.append("Description")
                         if ct_val == "Kurdtel" and not ks_val:
                             missing.append("Kurdtel Service Status")
+                        if ct_val == "Kurdtel" and not kurdtel_issue_type_val:
+                            missing.append("Kurdtel Issue Type")
                         if ct_val == "Refund" and not refund_type_val:
                             missing.append("Refund Type")
 
@@ -3750,6 +3772,7 @@ elif st.session_state.active_tab == "Call Tickets" and st.session_state.active_s
                                 "ont_model": om_val,
                                 "complaint_status": cs_val,
                                 "kurdtel_service_status": ks_val if ct_val == "Kurdtel" else "",
+                                "issue_type": (kurdtel_issue_type_val if ct_val == "Kurdtel" else (st.session_state.get("issue_type_kurdtel") or "")),
                                 "online_game": ((online_game_val == "Other") and online_game_other or online_game_val) if ct_val == "Online Game Issue" else "",
                                 "olt": olt_val,
                                 "second_number": sn_val,
