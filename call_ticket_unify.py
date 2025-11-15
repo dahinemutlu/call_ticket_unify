@@ -1694,7 +1694,9 @@ if "tab" in st.query_params:
 with open("app_theme.css") as f:
     st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-init_ticket_store()
+# Only initialize ticket store if NOT on Home tab (avoid DB queries on landing page)
+if st.session_state.active_tab != "Home":
+    init_ticket_store()
 
 try:
     _detail_param = st.query_params.get("ticket_detail")
