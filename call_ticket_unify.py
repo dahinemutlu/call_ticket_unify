@@ -562,7 +562,8 @@ def get_tickets_engine() -> Engine:
     return create_engine(
         url,
         poolclass=NullPool,
-        future=True
+        future=True,
+        isolation_level="AUTOCOMMIT"
     )
 
 def _serialize_field(column: str, value: Any):
