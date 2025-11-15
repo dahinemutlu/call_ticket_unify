@@ -1785,11 +1785,18 @@ if _is_popup_view():
 
 # -------- Top bar --------
 if not _is_popup_view():
-    reminders = _collect_due_reminders()
-    notif_count = len(reminders)
+    # Only collect reminders and show notifications if NOT on Home tab
+    is_home_tab = st.session_state.active_tab == "Home"
+    if not is_home_tab:
+        reminders = _collect_due_reminders()
+        notif_count = len(reminders)
+    else:
+        reminders = []
+        notif_count = 0
 
     html = ['<div class="topbar">']
-    html.append('<input type="checkbox" id="notifications-toggle" class="notifications-toggle" />')
+    if not is_home_tab:
+        html.append('<input type="checkbox" id="notifications-toggle" class="notifications-toggle" />')
     logo_uri = _get_brand_logo_data_uri()
     logo_markup = f'<img src="{logo_uri}" alt="FiberCare logo" />' if logo_uri else ""
     html.append(f'<div class="brand">{logo_markup}<span class="brandStack">FiberCare</span></div>')
@@ -1809,13 +1816,17 @@ if not _is_popup_view():
                 f'<a href="?tab=Client" target="_self" class="tab{active_cls}">{icon} {name}</a>'
             )
         elif name == "Dahi Nemutlu":
-            badge = f'<span class="notif-pill">{notif_count}</span>' if notif_count else ""
-            tab_items.append(
-                '<span class="tab notifications-tab">'
-                f'<label for="notifications-toggle" class="notifications-trigger" aria-label="Notifications">{icon}{badge}</label>'
-                f'<span class="notifications-name">{name}</span>'
-                '</span>'
-            )
+            if not is_home_tab:
+                badge = f'<span class="notif-pill">{notif_count}</span>' if notif_count else ""
+                tab_items.append(
+                    '<span class="tab notifications-tab">'
+                    f'<label for="notifications-toggle" class="notifications-trigger" aria-label="Notifications">{icon}{badge}</label>'
+                    f'<span class="notifications-name">{name}</span>'
+                    '</span>'
+                )
+            else:
+                # On Home tab, show as disabled (no notifications functionality)
+                tab_items.append(f'<span class="tab-disabled" title="Notifications">{icon} {name}</span>')
         elif name == "Exit":
             tab_items.append(f'<span class="tab-disabled" title="Exit">{icon}</span>')
         else:
@@ -1838,125 +1849,126 @@ if not _is_popup_view():
     html.extend(tab_items)
     html.append('</div></div></div>')
 
-    # Notifications overlay (desktop & mobile)
-    notifications_content: list[str] = []
-    now_local = _now_local()
-    if reminders:
-        notifications_content.append('<div class="notifications-cards">')
-        for reminder in reminders:
-            scheduled_for = reminder.get("scheduled_for")
-            if isinstance(scheduled_for, pd.Timestamp):
-                scheduled_dt = scheduled_for.to_pydatetime()
-            else:
-                scheduled_dt = scheduled_for if isinstance(scheduled_for, datetime) else None
-            if scheduled_dt is None:
-                parsed_dt = pd.to_datetime(scheduled_for, errors="coerce")
-                if pd.isna(parsed_dt):
-                    continue
-                scheduled_dt = parsed_dt.to_pydatetime()
-            if scheduled_dt is not None:
-                scheduled_dt = _to_local_naive(scheduled_dt)
+    # Notifications overlay (desktop & mobile) - only render if NOT on Home tab
+    if not is_home_tab:
+        notifications_content: list[str] = []
+        now_local = _now_local()
+        if reminders:
+            notifications_content.append('<div class="notifications-cards">')
+            for reminder in reminders:
+                scheduled_for = reminder.get("scheduled_for")
+                if isinstance(scheduled_for, pd.Timestamp):
+                    scheduled_dt = scheduled_for.to_pydatetime()
+                else:
+                    scheduled_dt = scheduled_for if isinstance(scheduled_for, datetime) else None
+                if scheduled_dt is None:
+                    parsed_dt = pd.to_datetime(scheduled_for, errors="coerce")
+                    if pd.isna(parsed_dt):
+                        continue
+                    scheduled_dt = parsed_dt.to_pydatetime()
+                if scheduled_dt is not None:
+                    scheduled_dt = _to_local_naive(scheduled_dt)
 
-            time_display = scheduled_dt.strftime("%I:%M %p").lstrip("0")
-            if scheduled_dt.date() == now_local.date():
-                time_label = f"Today · {escape(time_display)}"
-            else:
-                time_label = scheduled_dt.strftime("%b %d, %Y · %I:%M %p").replace(" 0", " ")
-                time_label = escape(time_label)
+                time_display = scheduled_dt.strftime("%I:%M %p").lstrip("0")
+                if scheduled_dt.date() == now_local.date():
+                    time_label = f"Today · {escape(time_display)}"
+                else:
+                    time_label = scheduled_dt.strftime("%b %d, %Y · %I:%M %p").replace(" 0", " ")
+                    time_label = escape(time_label)
 
-            title_lines: list[str] = []
-            ticket_id = reminder.get("ticket_id")
-            if ticket_id:
-                title_lines.append(
-                    (
-                        '<span class="notification-card__title-line notification-card__title-line--primary">'
-                        f'Ticket #{escape(ticket_id)}'
-                        '</span>'
+                title_lines: list[str] = []
+                ticket_id = reminder.get("ticket_id")
+                if ticket_id:
+                    title_lines.append(
+                        (
+                            '<span class="notification-card__title-line notification-card__title-line--primary">'
+                            f'Ticket #{escape(ticket_id)}'
+                            '</span>'
+                        )
                     )
-                )
-            ont_id = reminder.get("ont_id")
-            if ont_id:
-                title_lines.append(
-                    (
-                        '<span class="notification-card__title-line notification-card__title-line--secondary">'
-                        f'ONT ID: {escape(ont_id)}'
-                        '</span>'
+                ont_id = reminder.get("ont_id")
+                if ont_id:
+                    title_lines.append(
+                        (
+                            '<span class="notification-card__title-line notification-card__title-line--secondary">'
+                            f'ONT ID: {escape(ont_id)}'
+                            '</span>'
+                        )
                     )
-                )
-            if not title_lines:
-                title_lines.append(
-                    '<span class="notification-card__title-line notification-card__title-line--primary">Reminder</span>'
-                )
-            header_text = "".join(title_lines)
+                if not title_lines:
+                    title_lines.append(
+                        '<span class="notification-card__title-line notification-card__title-line--primary">Reminder</span>'
+                    )
+                header_text = "".join(title_lines)
 
-            chip_parts: list[str] = []
-            ticket_group = reminder.get("ticket_group")
-            if ticket_group:
-                group_color = _resolve_badge_color(TICKET_GROUP_BADGE_COLORS, ticket_group)
-                style_attr = f' style="background:{group_color};color:#ffffff;"' if group_color else ""
-                chip_parts.append(
-                    f'<span class="notification-card__chip"{style_attr}>{escape(ticket_group)}</span>'
-                )
-            complaint_status = reminder.get("complaint_status")
-            if complaint_status:
-                status_color = _resolve_badge_color(COMPLAINT_STATUS_BADGE_COLORS, complaint_status)
-                style_attr = f' style="background:{status_color};color:#ffffff;"' if status_color else ""
-                chip_parts.append(
-                    f'<span class="notification-card__chip"{style_attr}>{escape(complaint_status)}</span>'
-                )
-            ticket_type = reminder.get("ticket_type")
-            if ticket_type:
-                chip_parts.append(
-                    f'<span class="notification-card__chip notification-card__chip--type">{escape(ticket_type)}</span>'
-                )
+                chip_parts: list[str] = []
+                ticket_group = reminder.get("ticket_group")
+                if ticket_group:
+                    group_color = _resolve_badge_color(TICKET_GROUP_BADGE_COLORS, ticket_group)
+                    style_attr = f' style="background:{group_color};color:#ffffff;"' if group_color else ""
+                    chip_parts.append(
+                        f'<span class="notification-card__chip"{style_attr}>{escape(ticket_group)}</span>'
+                    )
+                complaint_status = reminder.get("complaint_status")
+                if complaint_status:
+                    status_color = _resolve_badge_color(COMPLAINT_STATUS_BADGE_COLORS, complaint_status)
+                    style_attr = f' style="background:{status_color};color:#ffffff;"' if status_color else ""
+                    chip_parts.append(
+                        f'<span class="notification-card__chip"{style_attr}>{escape(complaint_status)}</span>'
+                    )
+                ticket_type = reminder.get("ticket_type")
+                if ticket_type:
+                    chip_parts.append(
+                        f'<span class="notification-card__chip notification-card__chip--type">{escape(ticket_type)}</span>'
+                    )
 
-            note_text = reminder.get("note", "")
-            note_html = escape(note_text).replace("\n", "<br />") if note_text else ""
+                note_text = reminder.get("note", "")
+                note_html = escape(note_text).replace("\n", "<br />") if note_text else ""
 
-            card_html = [
-                '<div class="notification-card">',
-                '<div class="notification-card__header">',
-                f'<div class="notification-card__title" style="color:#0f172a;">{header_text}</div>',
-                f'<div class="notification-card__time">{time_label}</div>',
-                '</div>',
-            ]
-            if chip_parts:
-                card_html.append('<div class="notification-card__tags">' + "".join(chip_parts) + '</div>')
-            if note_html:
-                card_html.append(f'<div class="notification-card__note">{note_html}</div>')
-            action_parts: list[str] = []
-            if ticket_id:
-                ticket_str = str(ticket_id)
-                ticket_attr = escape(ticket_str)
-                detail_query = {
-                    "tab": "Call Tickets",
-                    "subtab": "Tickets",
-                    "ticket_detail": ticket_str,
-                    "detail_token": f"{ticket_str}_{int(now_local.timestamp() * 1000)}",
-                }
-                detail_href = f"?{urlencode(detail_query)}"
-                action_parts.append(
-                    '<button type="button" class="notification-card__btn notification-card__btn--dismiss" '
-                    f'data-ticket-id="{ticket_attr}" aria-disabled="true" data-disabled="true">Dismiss</button>'
-                )
-                action_parts.append(
-                    f'<a href="{detail_href}" target="_self" class="notification-card__btn notification-card__btn--view" '
-                    f'data-ticket-id="{ticket_attr}" onclick="try{{document.getElementById(\'notifications-toggle\').checked=false;}}catch(e){{}}">View Ticket</a>'
-                )
-            if action_parts:
-                card_html.append('<div class="notification-card__actions">' + "".join(action_parts) + '</div>')
-            card_html.append('</div>')
-            notifications_content.append("".join(card_html))
-        notifications_content.append('</div>')
-    else:
-        notifications_content.append('<div class="notifications-empty">No pending reminders.</div>')
+                card_html = [
+                    '<div class="notification-card">',
+                    '<div class="notification-card__header">',
+                    f'<div class="notification-card__title" style="color:#0f172a;">{header_text}</div>',
+                    f'<div class="notification-card__time">{time_label}</div>',
+                    '</div>',
+                ]
+                if chip_parts:
+                    card_html.append('<div class="notification-card__tags">' + "".join(chip_parts) + '</div>')
+                if note_html:
+                    card_html.append(f'<div class="notification-card__note">{note_html}</div>')
+                action_parts: list[str] = []
+                if ticket_id:
+                    ticket_str = str(ticket_id)
+                    ticket_attr = escape(ticket_str)
+                    detail_query = {
+                        "tab": "Call Tickets",
+                        "subtab": "Tickets",
+                        "ticket_detail": ticket_str,
+                        "detail_token": f"{ticket_str}_{int(now_local.timestamp() * 1000)}",
+                    }
+                    detail_href = f"?{urlencode(detail_query)}"
+                    action_parts.append(
+                        '<button type="button" class="notification-card__btn notification-card__btn--dismiss" '
+                        f'data-ticket-id="{ticket_attr}" aria-disabled="true" data-disabled="true">Dismiss</button>'
+                    )
+                    action_parts.append(
+                        f'<a href="{detail_href}" target="_self" class="notification-card__btn notification-card__btn--view" '
+                        f'data-ticket-id="{ticket_attr}" onclick="try{{document.getElementById(\'notifications-toggle\').checked=false;}}catch(e){{}}">View Ticket</a>'
+                    )
+                if action_parts:
+                    card_html.append('<div class="notification-card__actions">' + "".join(action_parts) + '</div>')
+                card_html.append('</div>')
+                notifications_content.append("".join(card_html))
+            notifications_content.append('</div>')
+        else:
+            notifications_content.append('<div class="notifications-empty">No pending reminders.</div>')
 
-    html.append('<div class="notifications-overlay">')
-    html.append('<label for="notifications-toggle" class="overlay-backdrop"></label>')
-    html.append('<div class="notifications-drawer">')
-    html.append('<div class="menu-header"><div class="title">Notifications</div><label for="notifications-toggle" class="close-btn" aria-label="Close notifications"><span class="material-icons">close</span></label></div>')
-    html.extend(notifications_content)
-    html.append('</div></div>')
+        html.append('<div class="notifications-overlay">')
+        html.append('<label for="notifications-toggle" class="overlay-backdrop"></label>')
+        html.append('<div class="notifications-drawer">')
+        html.append('<div class="menu-header"><div class="title">Notifications</div><label for="notifications-toggle" class="close-btn" aria-label="Close notifications"><span class="material-icons">close</span></label></div>')
+        html.extend(notifications_content)
+        html.append('</div></div>')
 
     html.append('</div>')
 
