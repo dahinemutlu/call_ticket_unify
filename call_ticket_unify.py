@@ -22,6 +22,7 @@ from sqlalchemy import (
     update,
     func,
 )
+from sqlalchemy.pool import NullPool
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError, NoSuchTableError
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode, DataReturnMode
@@ -558,7 +559,11 @@ def _get_database_url() -> str:
 @st.cache_resource(show_spinner=False)
 def get_tickets_engine() -> Engine:
     url = _get_database_url()
-    return create_engine(url, pool_pre_ping=True, pool_recycle=3600, future=True)
+    return create_engine(
+        url,
+        poolclass=NullPool,
+        future=True
+    )
 
 def _serialize_field(column: str, value: Any):
     if column in BOOLEAN_COLUMNS:
